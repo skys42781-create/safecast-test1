@@ -1,0 +1,443 @@
+"""
+Safecast — TBM(작업 전 안전점검회의) 타겟 관리 모듈
+====================================================
+아침 조회에서 "오늘 누구를 집중 관리해야 하는가"를 자동 산출한다.
+
+[이 기능이 필요한 이유 — 고용노동부 대응지침 19쪽]
+    7년간('18~'24) 온열질환 산재 사망자 31명 중 25명(80.6%)이 투입 후 7일 이내 발생.
+    투입 첫날 13명(41.9%), 둘째날 9명(29.0%), 3~7일 3명(9.7%).
+    → 사망자의 41.9%가 '첫날'이다. 명단을 아침에 알아야 막을 수 있다.
+
+[설계 원칙]
+    ① 시스템은 '선별·기록'하고, '판정'하지 않는다.
+       근로 금지·제한은 산업안전보건법 제138조상 의사의 진단 사항이다.
+    ② 혈압 등 수치는 수집하지 않는다.
+       폭염 관련 법령·지침에 판정 기준이 없고, 활용 못 할 민감정보 보관은
+       개인정보 보호법의 최소수집 원칙에 반한다.
+    ③ 질환명은 목록에 노출하지 않는다.
+       산업안전보건법 제132조제2항 — 개별 근로자의 건강진단 결과는
+       본인 동의 없이 공개할 수 없다.
+
+[출처]
+    고용노동부, 「온열질환 예방을 위한 폭염 대비 사업장 대응지침」, 2026.5
+      · 민감군 대상 및 관리방법 … 18쪽
+      · 열순응 프로그램 예시 …… 19쪽
+      · 자각증상 점검표(행정안전부) … 18쪽
+      · 35℃/38℃ 조치사항 ……… 14쪽
+    질병관리청 폭염 취약집단 분석 (고령 65세 기준)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+# =====================================================================
+# SECTION A. 민감군 정의 (대응지침 18쪽 그대로)
+# =====================================================================
+
+
+@dataclass(frozen=True)
+class SensitiveType:
+    code: str
+    no: str          # 지침상 번호
+    label: str       # 화면 표시 (질환명 아님)
+    detail: str      # 보건관리자용 상세
+    auto: bool       # 출역 데이터로 자동 판정 가능한가
+
+
+SENSITIVE_TYPES: list[SensitiveType] = [
+    SensitiveType("chronic", "①", "만성질환 보유",
+                  "고혈압, 저혈압, 당뇨, 뇌심혈관질환, 신장질환 등", False),
+    SensitiveType("history", "②", "온열질환 기왕력",
+                  "과거 온열질환 발생 이력", False),
+    SensitiveType("elderly", "③", "고령자",
+                  "만 65세 이상 (질병관리청: 65세 이상 중증화 위험 1.99배)", True),
+    SensitiveType("medication", "④", "약물 복용",
+                  "체온 조절·체액량 등 신체기능에 영향을 미치는 약물", False),
+    SensitiveType("alcohol", "⑤", "알코올 의존", "알코올 의존이 있는 사람", False),
+    SensitiveType("heavy", "⑥", "고강도 작업",
+                  "형틀·철근·콘크리트타설·용접 등 전신 사용, 중량물 반복 취급, "
+                  "삽질·망치질·톱질 등 공구 사용작업", True),
+    SensitiveType("newcomer", "⑦", "신규배치자",
+                  "열순응이 되지 않은 작업자", True),
+    SensitiveType("acute", "⑧", "일시적 건강저하",
+                  "전날 과음, 탈수 등", False),
+]
+
+# 지침 ⑥이 직접 예시로 든 공종. 출역 데이터의 공종만으로 자동 분류된다.
+HEAVY_TRADES = ["형틀", "철근", "콘크리트타설", "용접", "비계", "철골"]
+
+ELDERLY_AGE = 65   # 질병관리청 분석 기준 (30~64세 1.48배 → 65세 이상 1.99배)
+
+
+def type_by_code(code: str) -> SensitiveType:
+    return next(t for t in SENSITIVE_TYPES if t.code == code)
+
+
+# =====================================================================
+# SECTION B. 열순응 프로그램 (대응지침 19쪽 표 그대로)
+# =====================================================================
+
+# 신규직원(또는 온열질환 민감군)
+ACCLIM_NEW = {1: 20, 2: 40, 3: 60, 4: 80, 5: 100}
+# 복귀직원(이전에 열순응 되었으나 연속 7일 이상 작업하지 않은 근로자)
+ACCLIM_RETURN = {1: 50, 2: 60, 3: 70, 4: 80, 5: 100}
+
+ACCLIM_SRC = "고용노동부 대응지침(2026.5) 19쪽 「열순응 프로그램 예시」"
+
+
+def acclim_ratio(day: int, is_return: bool) -> int | None:
+    """투입 n일차의 허용 작업량(%). 6일차 이상은 제한 없음(None)."""
+    table = ACCLIM_RETURN if is_return else ACCLIM_NEW
+    return table.get(int(day))
+
+
+# =====================================================================
+# SECTION C. 자각증상 점검표 (행정안전부, 지침 18쪽)
+# =====================================================================
+
+SYMPTOMS = [
+    "평소보다 높은 체온",
+    "두통",
+    "어지러움",
+    "메스꺼움",
+    "근육 경련",
+    "지나치게 많은 땀을 흘림",
+    "구역질",
+    "갑작스런 피로감",
+]
+
+SYMPTOM_THRESHOLD = 2   # 2개 이상 "예" → 조치
+
+SYMPTOM_ACTIONS = [
+    "시원한 장소로 이동하세요",
+    "옷을 느슨하게 하고 몸에 시원한 물을 적시고 선풍기 등으로 몸을 식히세요",
+    "물을 섭취하도록 하여 수분을 보충하세요",
+    "증상이 개선되지 않으면 즉시 119에 신고하세요",
+]
+
+
+# =====================================================================
+# SECTION D. 출역 명부
+# =====================================================================
+
+ROSTER_COLUMNS = [
+    "성명", "공종", "연령", "투입일차", "복귀자",
+    "만성질환", "온열질환기왕력", "약물복용", "알코올의존", "일시적건강저하",
+    "옥외작업",
+]
+
+# ⚠️ 질환명이 아니라 보유 여부(True/False)만 받는다.
+#    구체적 병명을 수집하면 개인정보 보호법상 부담만 커지고 판정에는 쓰이지 않는다.
+
+
+def make_demo_roster(n: int = 45, seed: int = 7) -> pd.DataFrame:
+    """시연용 더미 출역 명부.
+
+    실제 현장에서는 출역시스템 CSV/DB와 연동한다.
+    학생 신분으로 실제 명부(민감정보)를 취득할 수 없으므로 더미로 대체한다.
+    """
+    rng = np.random.default_rng(seed)
+    trades = HEAVY_TRADES + ["토공", "설비", "전기", "신호수", "조경"]
+    return pd.DataFrame({
+        "성명": [f"근로자{i:03d}" for i in range(1, n + 1)],
+        "공종": rng.choice(trades, n),
+        "연령": rng.integers(24, 72, n),
+        "투입일차": rng.choice([1, 2, 3, 4, 5, 9, 20, 60], n,
+                            p=[.07, .06, .05, .05, .04, .13, .25, .35]),
+        "복귀자": rng.choice([True, False], n, p=[.12, .88]),
+        "만성질환": rng.choice([True, False], n, p=[.16, .84]),
+        "온열질환기왕력": rng.choice([True, False], n, p=[.05, .95]),
+        "약물복용": rng.choice([True, False], n, p=[.09, .91]),
+        "알코올의존": rng.choice([True, False], n, p=[.03, .97]),
+        "일시적건강저하": rng.choice([True, False], n, p=[.08, .92]),
+        "옥외작업": rng.choice([True, False], n, p=[.85, .15]),
+    })
+
+
+def normalize_roster(df: pd.DataFrame) -> pd.DataFrame:
+    """업로드된 CSV를 표준 컬럼으로 보정. 없는 컬럼은 기본값으로 채운다."""
+    out = df.copy()
+    defaults = {
+        "성명": "", "공종": "미상", "연령": 0, "투입일차": 999, "복귀자": False,
+        "만성질환": False, "온열질환기왕력": False, "약물복용": False,
+        "알코올의존": False, "일시적건강저하": False, "옥외작업": True,
+    }
+    for c, d in defaults.items():
+        if c not in out.columns:
+            out[c] = d
+    for c in ["복귀자", "만성질환", "온열질환기왕력", "약물복용",
+              "알코올의존", "일시적건강저하", "옥외작업"]:
+        out[c] = out[c].astype(str).str.strip().str.lower().isin(
+            ["true", "1", "y", "yes", "예", "o", "ㅇ"]) | (out[c] == True)  # noqa: E712
+    for c in ["연령", "투입일차"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0).astype(int)
+    return out[ROSTER_COLUMNS]
+
+
+# =====================================================================
+# SECTION E. 민감군 판정
+# =====================================================================
+
+def classify_worker(row: pd.Series) -> list[str]:
+    """지침 8유형 중 해당하는 코드 목록을 반환."""
+    hit = []
+    if row["만성질환"]:
+        hit.append("chronic")
+    if row["온열질환기왕력"]:
+        hit.append("history")
+    if row["연령"] >= ELDERLY_AGE:
+        hit.append("elderly")
+    if row["약물복용"]:
+        hit.append("medication")
+    if row["알코올의존"]:
+        hit.append("alcohol")
+    if any(t in str(row["공종"]) for t in HEAVY_TRADES):
+        hit.append("heavy")
+    if acclim_ratio(row["투입일차"], row["복귀자"]) is not None:
+        hit.append("newcomer")
+    if row["일시적건강저하"]:
+        hit.append("acute")
+    return hit
+
+
+def build_tbm(roster: pd.DataFrame, tier_code: str) -> pd.DataFrame:
+    """TBM 타겟 명단 생성.
+
+    tier_code: 당일 통제 등급 (CRITICAL=38℃ 이상, SEVERE=35℃ …)
+    """
+    df = roster[roster["옥외작업"]].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, r in df.iterrows():
+        hits = classify_worker(r)
+        if not hits:
+            continue
+
+        ratio = acclim_ratio(r["투입일차"], r["복귀자"])
+        track = "복귀" if r["복귀자"] else "신규"
+
+        # ---- 관리등급 ----
+        # 38℃ 이상은 지침상 '민감군 옥외작업 제한'이 명시되어 있다.
+        if tier_code == "CRITICAL":
+            grade = "옥외작업 제한"
+        elif ratio is not None and ratio <= 40:
+            grade = "집중관찰"          # 열순응 초기 (사망자 70.9%가 1~2일차)
+        elif ratio is not None:
+            grade = "열순응 관리"
+        else:
+            grade = "집중관찰"
+
+        # ---- 조치사항 (질환명 없이) ----
+        act = []
+        if tier_code == "CRITICAL":
+            act.append("옥외작업 제한 [38℃ 이상]")
+        if ratio is not None:
+            act.append(f"{track} 열순응 {ratio}% ({r['투입일차']}일차)")
+        act.append("휴식시간 추가 배정 · 작업시간 단축")
+
+        rows.append({
+            "성명": r["성명"],
+            "공종": r["공종"],
+            "관리등급": grade,
+            "해당유형": len(hits),
+            "조치사항": " / ".join(act),
+            "_codes": ",".join(hits),
+            "_ratio": ratio if ratio is not None else "",
+            "_track": track if ratio is not None else "",
+        })
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    order = {"옥외작업 제한": 0, "집중관찰": 1, "열순응 관리": 2}
+    out["_o"] = out["관리등급"].map(order)
+    return out.sort_values(["_o", "해당유형"], ascending=[True, False]).drop(columns="_o")
+
+
+def public_view(tbm: pd.DataFrame) -> pd.DataFrame:
+    """TBM 조회용 — 질환명·상세 사유 없음. 아침 조회에서 화면에 띄우는 표."""
+    return tbm[["성명", "공종", "관리등급", "조치사항"]]
+
+
+def health_view(tbm: pd.DataFrame) -> pd.DataFrame:
+    """보건관리자용 — 해당 유형 상세 포함. 열람 권한 분리 필요."""
+    out = tbm.copy()
+    out["해당유형상세"] = out["_codes"].apply(
+        lambda s: " / ".join(f"{type_by_code(c).no}{type_by_code(c).label}"
+                             for c in s.split(",") if c))
+    return out[["성명", "공종", "관리등급", "해당유형상세", "조치사항"]]
+
+
+# =====================================================================
+# SECTION F. UI
+# =====================================================================
+
+BADGE = {
+    "의무": ("#B91C1C", "🔴"),
+    "권고": ("#C2410C", "🟠"),
+    "설정": ("#1D4ED8", "🔵"),
+    "미수집": ("#6B7280", "⚪"),
+}
+
+
+def badge(level: str, text: str) -> str:
+    c, icon = BADGE[level]
+    return (f'<span style="background:{c}18;color:{c};border:1px solid {c}55;'
+            f'border-radius:5px;padding:1px 7px;font-size:11.5px;font-weight:600;'
+            f'margin-right:5px;">{icon} {level} · {text}</span>')
+
+
+def render_worker_check() -> None:
+    """근로자 모드 — 자각증상 자가진단.
+
+    지침은 '근로자 스스로 체크'하도록 정하고 있다. 관리자가 대신 체크하면
+    취지에 맞지 않으며, 본인 입력이어야 민감정보 동의 문제도 정리된다.
+    """
+    st.subheader("🩺 온열질환 자각증상 자가진단")
+    st.caption("현재 느껴지는 증상을 체크하세요 · 행정안전부 점검표")
+
+    checked = []
+    c1, c2 = st.columns(2)
+    for i, s in enumerate(SYMPTOMS):
+        col = c1 if i < 4 else c2
+        if col.checkbox(s, key=f"sym_{i}"):
+            checked.append(s)
+
+    st.divider()
+    n = len(checked)
+
+    if n >= SYMPTOM_THRESHOLD:
+        st.error(f"⚠️ 증상 {n}개 — 즉시 아래 조치를 하고 관리자·동료에게 알리세요",
+                 icon="🚨")
+        for i, a in enumerate(SYMPTOM_ACTIONS, 1):
+            st.markdown(f"**{i}.** {a}")
+        st.markdown(
+            '<div style="background:#7F1D1D;color:#fff;padding:14px;'
+            'border-radius:8px;text-align:center;font-size:19px;font-weight:800;">'
+            '증상이 개선되지 않으면 즉시 119</div>', unsafe_allow_html=True)
+        st.caption("판단이 어려운 경우에도 즉시 119에 신고 후 응급조치하세요.")
+    elif n == 1:
+        st.warning(f"증상 {n}개 — 시원한 곳에서 휴식하고 수분을 보충하세요. "
+                   "증상이 늘어나면 즉시 알리세요.")
+    else:
+        st.success("체크된 증상이 없습니다. 그래도 갈증 전에 물을 자주 드세요.")
+
+    st.caption("입력 내용은 저장되지 않습니다 (새로고침 시 초기화).")
+
+
+def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
+                     day_max: float) -> None:
+    """관리자 모드 — TBM 타겟 명단."""
+    tbm = build_tbm(roster, tier_code)
+
+    st.markdown(badge("권고", "대응지침 18~19쪽") +
+                badge("미수집", "혈압 등 수치"), unsafe_allow_html=True)
+    st.caption(f"당일 최고 체감온도 {day_max:.1f}℃ · {tier_label} 기준으로 산출")
+
+    if tbm.empty:
+        st.info("옥외작업 대상 중 민감군·열순응 해당자가 없습니다.")
+        return
+
+    out_n = int((tbm["관리등급"] == "옥외작업 제한").sum())
+    m = st.columns(4)
+    m[0].metric("출역 인원", f"{len(roster)}명")
+    m[1].metric("옥외작업", f"{int(roster['옥외작업'].sum())}명")
+    m[2].metric("TBM 타겟", f"{len(tbm)}명")
+    m[3].metric("옥외작업 제한", f"{out_n}명",
+                delta="38℃ 이상" if out_n else None, delta_color="off")
+
+    if out_n:
+        st.error(f"🚨 체감온도 38℃ 이상 — 민감군 {out_n}명 옥외작업 제한 대상입니다. "
+                 "긴급조치 작업 외 옥외작업 중지를 함께 검토하세요.", icon="🚨")
+
+    tab1, tab2, tab3 = st.tabs(["📋 TBM 조회용", "🩺 보건관리자용", "🌡️ 열순응 현황"])
+
+    with tab1:
+        st.caption("아침 조회에서 화면에 띄우는 표 — 질환명·상세 사유 미표시")
+        st.dataframe(public_view(tbm), hide_index=True, use_container_width=True,
+                     height=420)
+        st.download_button("📥 TBM 명단 CSV",
+                           public_view(tbm).to_csv(index=False).encode("utf-8-sig"),
+                           file_name="TBM_명단.csv", mime="text/csv")
+        st.caption("ℹ️ 산업안전보건법 제132조제2항 — 개별 근로자의 건강진단 결과는 "
+                   "본인 동의 없이 공개할 수 없습니다.")
+
+    with tab2:
+        st.caption("⚠️ 열람 권한 분리 대상 — 보건관리자·산업보건의만 접근")
+        st.dataframe(health_view(tbm), hide_index=True, use_container_width=True,
+                     height=420)
+        st.download_button("📥 보건관리자용 CSV",
+                           health_view(tbm).to_csv(index=False).encode("utf-8-sig"),
+                           file_name="보건관리자용_명단.csv", mime="text/csv")
+
+    with tab3:
+        ac = tbm[tbm["_ratio"] != ""].copy()
+        if ac.empty:
+            st.info("열순응 프로그램 진행 중인 근로자가 없습니다.")
+        else:
+            ac["허용 작업량"] = ac["_ratio"].astype(int).astype(str) + "%"
+            ac["트랙"] = ac["_track"]
+            st.dataframe(ac[["성명", "공종", "트랙", "허용 작업량", "관리등급"]],
+                         hide_index=True, use_container_width=True)
+
+        st.markdown("##### 열순응 프로그램 (5일간 단계적 적용)")
+        st.dataframe(pd.DataFrame([
+            {"구분": "신규직원 (또는 민감군)", **{f"{d}일": f"{v}%"
+                                          for d, v in ACCLIM_NEW.items()}},
+            {"구분": "복귀직원 (연속 7일 이상 미작업)", **{f"{d}일": f"{v}%"
+                                                for d, v in ACCLIM_RETURN.items()}},
+        ]), hide_index=True, use_container_width=True)
+        st.caption(f"출처: {ACCLIM_SRC}")
+        st.info("온열질환 산재 사망자의 41.9%가 투입 첫날, 29.0%가 둘째날에 "
+                "발생했습니다. (7년간 31명 중 25명이 7일 이내)")
+
+
+def render_basis() -> None:
+    """근거 탭 — 어떤 항목이 어떤 등급인지 한눈에."""
+    st.markdown("#### 판정 근거 등급")
+    st.dataframe(pd.DataFrame([
+        {"항목": "33℃ 2시간 이내 20분 휴식", "등급": "🔴 의무",
+         "근거": "안전보건규칙 제560조제3항"},
+        {"항목": "체감온도·조치사항 일자별 기록·보관", "등급": "🔴 의무",
+         "근거": "안전보건규칙 제562조제2항제3호"},
+        {"항목": "민감군 8유형", "등급": "🟠 권고", "근거": "대응지침 18쪽"},
+        {"항목": "열순응 20/40/60/80/100%", "등급": "🟠 권고", "근거": "대응지침 19쪽"},
+        {"항목": "복귀자 50/60/70/80/100%", "등급": "🟠 권고", "근거": "대응지침 19쪽"},
+        {"항목": "자각증상 2개 이상 조치", "등급": "🟠 권고",
+         "근거": "대응지침 18쪽(행정안전부 점검표)"},
+        {"항목": "38℃ 민감군 옥외작업 제한", "등급": "🟠 권고", "근거": "대응지침 14쪽"},
+        {"항목": "고령 65세", "등급": "🟠 권고",
+         "근거": "질병관리청 (65세 이상 중증화 위험 1.99배)"},
+        {"항목": "공정 블록 구간", "등급": "🔵 설정",
+         "근거": "14~17시만 법정 · 나머지는 현장 공정"},
+        {"항목": "사전 알람 리드타임", "등급": "🔵 설정", "근거": "현장 규모별"},
+        {"항목": "혈압 등 수치", "등급": "⚪ 미수집",
+         "근거": "법령상 판정 기준 없음 · 제138조상 의사 판단"},
+    ]), hide_index=True, use_container_width=True)
+
+    st.markdown("""
+#### 왜 혈압 수치를 수집하지 않는가
+1. **폭염 관련 법령·지침에 수치 기준이 없다.** 대응지침은 민감군을 진단명으로만 열거한다.
+2. **수치가 나오는 조문은 적용 대상이 다르다.** 시행규칙 제221조(고혈압증 등)는
+   *고기압 업무*(잠수·압기)용이며, 그마저도 진단명만 열거한다.
+3. **판정 권한이 의사에게 있다.** 산업안전보건법 제138조는 근로 금지·제한을
+   의사의 진단에 따르도록 한다.
+
+→ 판정할 수 없는 민감정보를 보관하면 개인정보 보호법상 최소수집 원칙에 반하고,
+   사고 시 "알고도 방치했다"는 근거가 될 수 있다.
+
+#### 개인정보 처리 근거와 제약
+- **처리 근거** — 개인정보 보호법 제23조제1항제2호(법령이 민감정보 처리를 요구·허용).
+  대응지침이 "민감군을 선정하고 적정 배치"할 것을 요구하므로 개인 식별이 불가피하다.
+- **제약** — 산업안전보건법 제132조: ①본인 동의 없는 공개 금지 ②건강 보호·유지 외
+  목적 사용 금지 → 목록에 질환명 미표시, 열람 권한 분리, CSV 2종 분리로 반영.
+
+⚠️ 법적 논리는 산업보건 분야 전문가(노무사·직업환경의학전문의) 확인을 권장합니다.
+""")

@@ -26,6 +26,8 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+import tbm as T
+
 KST = ZoneInfo("Asia/Seoul")
 
 # ---------------------------------------------------------------------
@@ -530,25 +532,27 @@ def main() -> None:
     with st.sidebar:
         st.header("⚙️ 관제 설정")
 
-        if kakao:
-            place = st.text_input("현장 위치", placeholder="예: 국민대학교")
-            manual = None
-        else:
-            # 카카오 키가 없으면 위경도 직접 입력으로 대체
-            place = ""
-            st.caption("📍 카카오 키 미등록 — 위경도 직접 입력")
-            preset = st.selectbox("빠른 선택", [
-                "직접 입력", "서울시청", "부산시청", "강릉", "제주시청", "국민대학교"])
-            _P = {"서울시청": (37.5665, 126.9780), "부산시청": (35.1798, 129.0750),
-                  "강릉": (37.7519, 128.8761), "제주시청": (33.4996, 126.5312),
-                  "국민대학교": (37.6109, 126.9968)}
-            if preset == "직접 입력":
-                c1, c2 = st.columns(2)
-                manual = (c1.number_input("위도", value=37.5665, format="%.4f"),
-                          c2.number_input("경도", value=126.9780, format="%.4f"),
-                          "직접 입력 지점")
+        # ---- 모드 ----
+        # Streamlit은 사용자별 인증이 없어 URL을 아는 사람은 모두 접근할 수 있다.
+        # 민감군 명단이 노출되지 않도록 관리자 모드에 비밀번호를 건다.
+        mode = st.radio("모드", ["👷 근로자", "🛡️ 관리자"], horizontal=True)
+        is_admin = False
+        if mode.startswith("🛡️"):
+            try:
+                admin_pw = st.secrets.get("ADMIN_PW", "")
+            except Exception:
+                admin_pw = ""
+            if not admin_pw:
+                st.warning("secrets에 ADMIN_PW 미설정 — 임시 통과")
+                is_admin = True
             else:
-                manual = (*_P[preset], preset)
+                pw = st.text_input("관리자 비밀번호", type="password")
+                is_admin = (pw == admin_pw)
+                if pw and not is_admin:
+                    st.error("비밀번호가 일치하지 않습니다.")
+        st.divider()
+
+        place = st.text_input("현장 위치", placeholder="예: 국민대학교")
 
         st.divider()
         demo = st.toggle("데모 모드 (API 미사용)", value=not kma,
@@ -570,8 +574,9 @@ def main() -> None:
     # ---------- 위치 ----------
     if demo:
         lat, lon, name = 37.4979, 127.0276, place or "데모 현장"
-    elif manual:
-        lat, lon, name = manual
+    elif not kakao:
+        # 카카오 키가 없으면 데모 좌표로 대체 (기상청 키만으로도 동작)
+        lat, lon, name = 37.5665, 126.9780, place or "서울시청(기본)"
     else:
         if not place:
             st.info("사이드바에 현장 위치를 입력하세요.")
@@ -647,7 +652,39 @@ def main() -> None:
         )
 
     today_df, tmr_df = fc[fc["day"] == today], fc[fc["day"] == tomorrow]
+    day_max = float(today_df["at"].max()) if not today_df.empty else float(fc["at"].max())
+    day_tier = classify(day_max)
 
+    # ---------- 근로자 모드 ----------
+    # 지침은 자각증상 점검표를 '근로자 스스로' 체크하도록 정한다.
+    # 근로자에게는 남의 건강정보를 일절 보여주지 않는다.
+    if not is_admin:
+        st.markdown(
+            f"""<div style="background:{day_tier.color};color:#fff;padding:18px;
+                    border-radius:10px;text-align:center;margin-bottom:14px;">
+              <div style="font-size:13px;opacity:.9;">오늘 우리 현장</div>
+              <div style="font-size:38px;font-weight:800;line-height:1.2;">
+                  {day_max:.1f}℃</div>
+              <div style="font-size:17px;font-weight:700;">{day_tier.label}</div>
+            </div>""", unsafe_allow_html=True)
+
+        if day_tier.cycle_hours:
+            st.info(f"💧 오늘은 **{day_tier.cycle_hours:.0f}시간마다 "
+                    f"{day_tier.rest_minutes}분 이상** 휴식이 부여됩니다.")
+        if day_tier.stop_work:
+            st.error("🚫 " + day_tier.actions[1] if len(day_tier.actions) > 1
+                     else "🚫 " + day_tier.actions[0], icon="🚨")
+
+        st.divider()
+        T.render_worker_check()
+
+        st.divider()
+        st.caption("🛑 몸이 이상하면 즉시 작업을 멈추고 알리세요. "
+                   "근로자는 작업중지를 요청할 권리가 있습니다.")
+        st.caption("관리자는 사이드바에서 관리자 모드로 전환하세요.")
+        return
+
+    # ---------- 이하 관리자 모드 ----------
     # ---------- D+1 사전 경보 ----------
     if not tmr_df.empty and not today_df.empty:
         tt, yt = classify(tmr_df["at"].max()), classify(today_df["at"].max())
@@ -658,7 +695,8 @@ def main() -> None:
                 f"오늘 중 조치: 공정계획 조정 · 쉼터/음용수 물량 확보 · "
                 f"민감군 배치 재검토 · 조기출근 전환 검토", icon="🚨")
 
-    t1, t2, t3 = st.tabs([f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})", "📖 법적 근거"])
+    t1, t2, t4, t3 = st.tabs([f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
+                              "👷 TBM 타겟 명단", "📖 법적 근거"])
 
     with t1:
         if today_df.empty:
@@ -671,6 +709,25 @@ def main() -> None:
             st.warning("내일 예보 데이터가 없습니다.")
         else:
             render_day(tmr_df, tomorrow, conservative, lead)
+
+    with t4:
+        st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 자동 선별합니다.")
+        up = st.file_uploader(
+            "출역 명부 CSV (미업로드 시 시연용 더미 사용)", type="csv",
+            help="컬럼: " + ", ".join(T.ROSTER_COLUMNS))
+        if up is not None:
+            try:
+                roster = T.normalize_roster(pd.read_csv(up))
+                st.success(f"출역 명부 {len(roster)}명 로드")
+            except Exception as e:
+                st.error(f"CSV 읽기 실패 → 더미로 대체\n\n`{e}`")
+                roster = T.make_demo_roster()
+        else:
+            roster = T.make_demo_roster()
+            st.caption("🟡 시연용 더미 명부 — 실제 현장에서는 출역시스템 CSV/DB 연동")
+
+        st.divider()
+        T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
 
     with t3:
         st.dataframe(pd.DataFrame([{
@@ -699,6 +756,8 @@ def main() -> None:
 
 ⚠️ 발표 전 고용노동부 최신 보도자료로 기준 재검증 필요 (매년 갱신).
 """)
+        st.divider()
+        T.render_basis()
 
 
 if __name__ == "__main__":
