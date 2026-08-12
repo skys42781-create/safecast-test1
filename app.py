@@ -565,6 +565,8 @@ def main() -> None:
                                      help="현장이 넓거나 고층일수록 이동·마무리 시간이 길어집니다.")]
         conservative = st.toggle("보수적 MAX 적용", value=True,
                                  help="끄면 블록 평균 기준. A/B 비교 시연용.")
+        extra_min = st.slider("민감군 추가 휴식(분)", 0, 30, 10, 5,
+                              help="지침은 '추가 배정'을 요구하나 분량은 미규정 — 현장 설정")
 
         if not demo and not kma:
             st.error("secrets.toml에 KMA_KEY를 등록하세요.")
@@ -704,8 +706,9 @@ def main() -> None:
             _pending = int((_rp["처리상태"] == "미확인").sum())
     _rtab = f"🚨 증상 신고 ({_pending})" if _pending else "🚨 증상 신고"
 
-    t1, t2, t4, t5, t3 = st.tabs([f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-                                  "👷 TBM 타겟 명단", _rtab, "📖 법적 근거"])
+    t1, t2, t6, t4, t5, t3 = st.tabs(
+        [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
+         "⏰ 휴식 알람", "👷 TBM 타겟 명단", _rtab, "📖 법적 근거"])
 
     with t1:
         if today_df.empty:
@@ -718,6 +721,18 @@ def main() -> None:
             st.warning("내일 예보 데이터가 없습니다.")
         else:
             render_day(tmr_df, tomorrow, conservative, lead)
+
+    with t6:
+        st.caption("휴식 시각별로 전원 휴식과 추가 배정 대상을 함께 산출합니다.")
+        _blocks = build_blocks(today_df, today, conservative) if not today_df.empty \
+            else pd.DataFrame()
+        _tbm = T.build_tbm(st.session_state.get("_roster", T.make_demo_roster()),
+                           day_tier.code)
+        if _blocks.empty:
+            st.warning("오늘 잔여 예보가 없습니다.")
+        else:
+            T.render_rest_alarm(_blocks, _tbm, lead, extra_min, rest_slots,
+                                now.strftime("%H:%M"))
 
     with t4:
         st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 자동 선별합니다.")
@@ -734,6 +749,7 @@ def main() -> None:
         else:
             roster = T.make_demo_roster()
             st.caption("🟡 시연용 더미 명부 — 실제 현장에서는 출역시스템 CSV/DB 연동")
+        st.session_state["_roster"] = roster
 
         st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)

@@ -263,6 +263,126 @@ def build_tbm(roster: pd.DataFrame, tier_code: str) -> pd.DataFrame:
     return out.sort_values(["_o", "해당유형"], ascending=[True, False]).drop(columns="_o")
 
 
+SHORT = {"chronic": "만성질환", "history": "기왕력", "elderly": "고령",
+         "medication": "약물", "alcohol": "-", "heavy": "고강도",
+         "newcomer": "", "acute": "컨디션"}
+
+
+def short_reason(row: pd.Series) -> str:
+    """명단에 붙일 짧은 사유. 질환명은 쓰지 않는다."""
+    parts = []
+    if row["_ratio"] != "":
+        parts.append(f"{row['_track']} {row['_ratio']}%")
+    for c in str(row["_codes"]).split(","):
+        lab = SHORT.get(c, "")
+        if lab and lab != "-":
+            parts.append(lab)
+    return " · ".join(parts[:3])
+
+
+def build_rest_alarms(blocks: pd.DataFrame, tbm: pd.DataFrame,
+                      lead_min: int, extra_min: int,
+                      rest_slots_fn) -> pd.DataFrame:
+    """휴식 시각별 알람 + 추가 배정 대상 명단.
+
+    [근거]
+      · 전원 휴식 — 체감온도 33℃ 이상 매 2시간 이내 20분 이상
+        (안전보건규칙 제560조제3항, 법적 의무)
+      · 추가 배정 — 온열질환 민감군·작업강도가 높은 작업자에게는 휴식시간 추가 배정
+        (대응지침 14쪽 35·38℃ 조치, 18쪽 민감군 관리방법 ④)
+      · 사전 알람 — 작업 마무리·이동·휴게시설 점검 리드타임 확보
+
+    [추가 시간(extra_min)은 설정값]
+      지침은 '추가 배정'을 요구하나 구체적 분량을 정하지 않는다. 현장이 정한다.
+    """
+    if tbm.empty:
+        targets = pd.DataFrame(columns=["성명", "공종", "사유"])
+    else:
+        t = tbm.copy()
+        t["사유"] = t.apply(short_reason, axis=1)
+        targets = t[["성명", "공종", "사유"]]
+
+    rows = []
+    for _, b in blocks.iterrows():
+        if not b["is_work"]:
+            continue
+        for slot in rest_slots_fn(b):
+            start, end = slot["휴식 시작"], slot["휴식 종료"]
+            ext_end = (pd.Timestamp(f"2000-01-01 {start}") +
+                       pd.Timedelta(minutes=int(
+                           (pd.Timestamp(f"2000-01-01 {end}") -
+                            pd.Timestamp(f"2000-01-01 {start}")).seconds / 60
+                           ) + extra_min)).strftime("%H:%M")
+            send = (pd.Timestamp(f"2000-01-01 {start}") -
+                    pd.Timedelta(minutes=lead_min)).strftime("%H:%M")
+            rows.append({
+                "발송시각": send, "휴식시작": start, "휴식종료": end,
+                "추가종료": ext_end, "블록": b["block_name"],
+                "등급": b["tier_label"], "근거": slot["근거"],
+                "추가대상": len(targets),
+            })
+    return pd.DataFrame(rows), targets
+
+
+def render_rest_alarm(blocks: pd.DataFrame, tbm: pd.DataFrame, lead_min: int,
+                      extra_min: int, rest_slots_fn, now_hm: str) -> None:
+    """휴식 알람 화면 — 시각별 대상 명단까지."""
+    st.subheader("⏰ 휴식 알람 · 추가 배정 대상")
+
+    alarms, targets = build_rest_alarms(blocks, tbm, lead_min, extra_min,
+                                        rest_slots_fn)
+    if alarms.empty:
+        st.info("정기 휴식 부여 기준(체감온도 33℃) 미도달 — 예정된 휴식 알람이 없습니다.")
+        st.caption("31℃ 이상이면 적절한 휴식을 부여해야 하나, 시각이 정해지지 않습니다.")
+        return
+
+    # ---- 다음 휴식 ----
+    nxt = alarms[alarms["휴식시작"] >= now_hm]
+    if not nxt.empty:
+        r = nxt.iloc[0]
+        st.markdown(
+            f'''<div style="background:#1E293B;color:#fff;padding:16px 20px;
+                    border-radius:10px;margin-bottom:12px;">
+              <div style="font-size:13px;opacity:.85;">다음 휴식 · {r["블록"]}</div>
+              <div style="font-size:32px;font-weight:800;line-height:1.2;">
+                  {r["휴식시작"]} ~ {r["휴식종료"]}</div>
+              <div style="font-size:14px;opacity:.9;">
+                  전원 휴식 · 추가 배정 {r["추가대상"]}명은 {r["추가종료"]}까지</div>
+              <div style="font-size:12px;opacity:.75;margin-top:4px;">
+                  📢 {r["발송시각"]}에 알람을 전달하세요</div>
+            </div>''', unsafe_allow_html=True)
+    else:
+        st.success("오늘 예정된 휴식이 모두 지났습니다.")
+
+    st.dataframe(
+        alarms[["발송시각", "휴식시작", "휴식종료", "추가종료", "블록", "등급", "근거"]],
+        hide_index=True, use_container_width=True)
+
+    # ---- 추가 배정 대상 명단 ----
+    st.markdown(f"##### 휴식시간 추가 배정 대상 · {len(targets)}명")
+    if targets.empty:
+        st.info("추가 배정 대상이 없습니다.")
+    else:
+        st.dataframe(targets, hide_index=True, use_container_width=True,
+                     height=min(320, 40 + 35 * len(targets)))
+        st.caption("근거: 대응지침 14쪽(35·38℃ 조치) · 18쪽 민감군 관리방법 ④ "
+                   "— 민감군·고강도 작업자는 휴식시간 추가 배정")
+
+    # ---- 발송 메시지 ----
+    st.markdown("##### 📢 전달 문구")
+    st.caption("현장 방송 또는 단톡방에 그대로 붙여넣으세요")
+    for _, r in alarms.iterrows():
+        names = " ".join(f"{n}({s})" for n, s in
+                         zip(targets["성명"], targets["사유"])) if not targets.empty else "없음"
+        msg = (f"[Safecast] {lead_min}분 후 휴식시간입니다\n"
+               f"· {r['휴식시작']}~{r['휴식종료']} 전원 휴식 ({r['근거']})\n"
+               f"· 추가 배정 {len(targets)}명 — {r['추가종료']}까지\n"
+               f"  {names}\n"
+               f"· 안전관리자: 휴게시설 냉방·음용수 상태를 지금 점검하세요")
+        with st.expander(f"{r['발송시각']} → {r['휴식시작']} 휴식 ({r['블록']})"):
+            st.code(msg, language=None)
+
+
 def public_view(tbm: pd.DataFrame) -> pd.DataFrame:
     """TBM 조회용 — 질환명·상세 사유 없음. 아침 조회에서 화면에 띄우는 표."""
     return tbm[["성명", "공종", "관리등급", "조치사항"]]
