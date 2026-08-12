@@ -39,10 +39,10 @@ import requests
 # 수집 대상 현장. 여러 곳을 동시에 모을 수 있다.
 # 실제 대상 현장이 정해지면 좌표만 바꾸면 된다.
 SITES = [
-    {"name": "seoul_cityhall",  "lat": 37.5665, "lon": 126.9780},
-    {"name": "busan_cityhall",  "lat": 35.1798, "lon": 129.0750},
-    {"name": "daegu_cityhall",  "lat": 35.8714, "lon": 128.6014},
-    {"name": "gangneung",       "lat": 37.7519, "lon": 128.8761},
+    {"name": "seoul",     "lat": 37.5665, "lon": 126.9780},  # 내륙 도시(열섬)
+    {"name": "busan",     "lat": 35.1798, "lon": 129.0750},  # 해안
+    {"name": "daegu",     "lat": 35.8714, "lon": 128.6014},  # 분지
+    {"name": "gangneung", "lat": 37.7519, "lon": 128.8761},  # 동해안·산지
 ]
 
 # 예보 중 저장할 구간 (시간). 0~48이면 오늘~모레까지.
