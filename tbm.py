@@ -416,7 +416,11 @@ def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
         st.error(f"🚨 체감온도 38℃ 이상 — 민감군 {out_n}명 옥외작업 제한 대상입니다. "
                  "긴급조치 작업 외 옥외작업 중지를 함께 검토하세요.", icon="🚨")
 
-    tab1, tab2, tab3 = st.tabs(["📋 TBM 조회용", "🩺 보건관리자용", "🌡️ 열순응 현황"])
+    tab1, tab0, tab2, tab3 = st.tabs(
+        ["📋 TBM 조회용", "✅ 컨디션 체크", "🩺 보건관리자용", "🌡️ 열순응 현황"])
+
+    with tab0:
+        render_condition_check(roster, tbm)
 
     with tab1:
         st.caption("아침 조회에서 화면에 띄우는 표 — 질환명·상세 사유 미표시")
@@ -456,6 +460,95 @@ def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
         st.caption(f"출처: {ACCLIM_SRC}")
         st.info("온열질환 산재 사망자의 41.9%가 투입 첫날, 29.0%가 둘째날에 "
                 "발생했습니다. (7년간 31명 중 25명이 7일 이내)")
+
+
+def render_condition_check(roster: pd.DataFrame, tbm: pd.DataFrame) -> None:
+    """TBM 컨디션 체크 — 관리자가 아침 조회에서 일괄 확인.
+
+    [왜 관리자 입력인가]
+      작업 중 개별 휴대폰 사용이 제한되는 현장이 많다. TBM은 전원이 모이고
+      관리자가 독려할 수 있는 유일한 시점이므로, 입력을 이 시점에 몰아준다.
+      (근로자 개별 입력은 시트 연동 후 전환 가능)
+
+    [왜 이상자만 고르는가]
+      60명을 한 명씩 체크하면 조회가 늘어지고, 늘어지면 안 하게 된다.
+      '이상 없음'을 기본으로 두고 예외만 뽑아내는 것이 현장에서 돌아간다.
+
+    [기록]
+      안전보건규칙 제562조제2항제3호 — 체감온도와 조치사항을 일자별로 기록하고
+      해당 연도 12월 31일까지 보관해야 한다. CSV로 내려받아 보관한다.
+    """
+    st.subheader("✅ TBM 컨디션 체크")
+    st.caption("아침 조회에서 컨디션 이상자만 선택하세요 · 나머지는 이상 없음으로 처리됩니다")
+
+    if roster.empty:
+        st.info("출역 명부가 없습니다.")
+        return
+
+    names = roster["성명"].astype(str).tolist()
+    target = set(tbm["성명"].tolist()) if not tbm.empty else set()
+
+    picked = st.multiselect(
+        "컨디션 이상자", names,
+        format_func=lambda n: f"{n} ⚠️" if n in target else n,
+        help="⚠️ 표시는 민감군·열순응 대상자입니다")
+
+    if not picked:
+        st.success(f"컨디션 이상자 없음 · 출역 {len(roster)}명 전원 정상")
+        st.caption("이상자가 있으면 위에서 선택하세요.")
+        return
+
+    st.divider()
+    REASONS = ["자각증상 있음", "전날 과음 / 수면부족", "몸살·감기 등", "기타"]
+
+    rows = []
+    for nm in picked:
+        info = roster[roster["성명"].astype(str) == nm].iloc[0]
+        flag = " · ⚠️ 민감군/열순응 대상" if nm in target else ""
+        with st.container(border=True):
+            st.markdown(f"**{nm}** · {info['공종']}{flag}")
+            c1, c2 = st.columns([3, 1])
+            rs = c1.multiselect("사유", REASONS, key=f"rsn_{nm}",
+                                label_visibility="collapsed",
+                                placeholder="사유 선택")
+            cnt = c2.number_input("자각증상 개수", 0, 8, 0, key=f"cnt_{nm}")
+
+            if cnt >= SYMPTOM_THRESHOLD:
+                st.error(f"🚨 자각증상 {cnt}개 — **작업 투입 전 조치 필요**. "
+                         "시원한 곳에서 휴식 후 상태 확인, 개선되지 않으면 119.")
+                act = "작업 투입 보류 · 즉시 조치"
+            elif cnt == 1 or rs:
+                st.warning("⚠️ 집중관찰 대상 — 작업 중 주기적으로 상태를 확인하세요.")
+                act = "집중관찰 · 휴식 추가 배정"
+            else:
+                act = "확인"
+
+            rows.append({"성명": nm, "공종": info["공종"],
+                         "사유": ", ".join(rs) if rs else "-",
+                         "자각증상": cnt, "조치": act})
+
+    st.divider()
+    log = pd.DataFrame(rows)
+    urgent = int((log["자각증상"] >= SYMPTOM_THRESHOLD).sum())
+
+    m = st.columns(3)
+    m[0].metric("이상자", f"{len(log)}명")
+    m[1].metric("즉시 조치", f"{urgent}명",
+                delta="투입 보류" if urgent else None, delta_color="off")
+    m[2].metric("민감군 중복", f"{len(set(picked) & target)}명")
+
+    if urgent:
+        st.error(f"🚨 자각증상 2개 이상 {urgent}명 — 작업 투입 전 조치가 필요합니다.",
+                 icon="🚨")
+
+    st.dataframe(log, hide_index=True, use_container_width=True)
+    st.download_button(
+        "📥 TBM 컨디션 기록 CSV",
+        log.to_csv(index=False).encode("utf-8-sig"),
+        file_name="TBM_컨디션체크.csv", mime="text/csv")
+    st.caption("ℹ️ 안전보건규칙 제562조제2항제3호 — 체감온도와 조치사항은 일자별로 "
+               "기록하고 해당 연도 12월 31일까지 보관해야 합니다.")
+    st.caption("⚠️ 화면을 새로고침하면 초기화됩니다. 조회 직후 CSV로 내려받으세요.")
 
 
 def render_basis() -> None:
