@@ -614,14 +614,6 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
         if not found:
             st.info("정기 휴식 부여 기준(체감온도 33℃) 미도달")
 
-        alarms = build_alarms(blocks, lead)
-        if not alarms.empty:
-            st.markdown(f"##### T-{lead} 사전 알람")
-            st.dataframe(alarms[["발송시각", "대상 블록", "블록 시작", "등급", "체감온도"]],
-                         hide_index=True, use_container_width=True)
-            for _, a in alarms.iterrows():
-                with st.expander(f"{a['발송시각']} → {a['대상 블록']} 메시지"):
-                    st.code(a["메시지"], language=None)
 
 
 def main() -> None:
@@ -677,15 +669,17 @@ def main() -> None:
                            help="켜면 안전보건규칙상 '의무' 조치만 표시합니다. "
                                 "35℃ 매시간 15분은 지침 권고이며, 법적 최소는 "
                                 "여전히 2시간마다 20분입니다.")
-        conservative = st.toggle("보수적 MAX 적용", value=True,
-                                 help="끄면 블록 평균 기준. A/B 비교 시연용.")
-        extra_min = st.slider("민감군 추가 휴식(분)", 0, 30, 10, 5,
-                              help="지침은 '추가 배정'을 요구하나 분량 미규정 — 현장 설정. "
-                                   "기본 10분은 지침 우수사례 기준")
-        c_a, c_b = st.columns(2)
-        work_start = c_a.text_input("작업 시작", "08:00")
-        work_hours = c_b.number_input("정상작업(h)", 4.0, 12.0, 8.0, 0.5,
-                                      help="근로기준법 제50조 1일 8시간 기준 · 현장 조정 가능")
+
+        with st.expander("🔧 현장 설정"):
+            conservative = st.toggle("보수적 MAX 적용", value=True,
+                                     help="끄면 블록 평균 기준. A/B 비교 시연용.")
+            extra_min = st.slider("민감군 추가 휴식(분)", 0, 30, 10, 5,
+                                  help="지침은 '추가 배정'을 요구하나 분량 미규정. "
+                                       "기본 10분은 지침 우수사례 기준")
+            c_a, c_b = st.columns(2)
+            work_start = c_a.text_input("작업 시작", "08:00")
+            work_hours = c_b.number_input("정상작업(h)", 4.0, 12.0, 8.0, 0.5,
+                                          help="근로기준법 제50조 1일 8시간 기준")
 
         if not demo and not kma:
             st.error("secrets.toml에 KMA_KEY를 등록하세요.")
@@ -827,7 +821,7 @@ def main() -> None:
 
     t1, t2, t6, t4, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-         "⏰ 휴식 알람", "👷 TBM 타겟 명단", "📖 법적 근거"])
+         "⏰ 알람", "👷 TBM 타겟 명단", "📖 법적 근거"])
 
     with t1:
         if today_df.empty:
@@ -842,7 +836,7 @@ def main() -> None:
             render_day(tmr_df, tomorrow, conservative, lead, strict)
 
     with t6:
-        st.caption("휴식 시각별로 전원 휴식과 추가 배정 대상을 함께 산출합니다.")
+        st.caption("블록 진입 · 휴식 · 열순응 종료 알람을 한 곳에서 관리합니다.")
         _blocks = build_blocks(today_df, today, conservative) \
             if not today_df.empty \
             else pd.DataFrame()
@@ -850,6 +844,17 @@ def main() -> None:
         if _blocks.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
+            ba = build_alarms(_blocks, lead)
+            if not ba.empty:
+                st.markdown("##### 🚧 블록 진입 알람")
+                st.caption("등급이 올라가는 구간에 들어가기 전 사전 통보")
+                st.dataframe(ba[["발송시각", "대상 블록", "블록 시작", "등급", "체감온도"]],
+                             hide_index=True, use_container_width=True)
+                for _, a in ba.iterrows():
+                    with st.expander(f"{a['발송시각']} → {a['대상 블록']} 진입"):
+                        st.code(a["메시지"], language=None)
+                st.divider()
+
             T.render_rest_alarm(_blocks, _tbm, lead, extra_min,
                                 lambda b: rest_slots(b, strict),
                                 now.strftime("%H:%M"))
