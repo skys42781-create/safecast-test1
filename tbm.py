@@ -297,120 +297,98 @@ def badge(level: str, text: str) -> str:
 
 
 def render_worker_check(day_tier_code: str = "NORMAL") -> None:
-    """근로자 모드 — 본인 상태 확인 + 자각증상 자가진단.
+    """근로자 모드 — 자각증상 자가진단 중심.
 
-    [입력 주체를 나눈 이유]
-      · 연령·공종·투입일차 → 출역시스템에 이미 있는 정보. 관리자 CSV로 받는다.
-      · 질환·약물·음주 등  → 민감정보. 본인이 입력하는 것이 곧 동의이며,
-                              저장하지 않으므로 보관 부담도 생기지 않는다.
-      · 자각증상            → 지침이 '근로자 스스로 체크'하도록 규정.
+    [왜 증상 체크를 맨 앞에 두는가]
+      열사병 초기 증상은 판단력 저하를 동반한다. 어지러운 사람에게
+      3단계 입력을 요구하면 도달하지 못한다. 주 동선은 짧을수록 안전하다.
 
-    [저장하지 않는 이유]
-      Streamlit은 세션이 사용자별로 분리되어 관리자 화면으로 전달되지 않는다.
-      외부 DB 연동은 확장 과제로 두고, 본 화면은 '본인 인지'와
-      '관리자에게 알릴 근거'를 만드는 데 집중한다.
+    [왜 질환·나이·공종을 묻지 않는가]
+      관리자가 출역 데이터로 이미 알고 있는 정보다. 근로자에게 다시 묻는 것은
+      중복이며, 민감정보를 매번 입력하게 만드는 부담만 남는다.
+      → 사전 선별은 TBM 명단(관리자), 실시간 감지는 이 화면(근로자)이 맡는다.
+
+    [저장]
+      증상 '개수'만 신고에 담기며, 종류·질환 정보는 저장하지 않는다.
     """
-    st.subheader("🩺 오늘의 내 상태 확인")
-    st.caption("입력 내용은 저장되지 않습니다 · 결과는 본인에게만 표시됩니다")
+    # ---- 1) 지금 몸 상태 (주 동선) ----
+    st.subheader("🩺 지금 몸 상태를 체크하세요")
+    st.caption("행정안전부 온열질환 자각증상 점검표 · 10초면 됩니다")
 
-    hits: list[str] = []
-
-    # ---- 1단계: 열순응 (⑦ 신규배치자) ----
-    st.markdown("##### 1. 폭염작업 투입 일차")
-    c1, c2 = st.columns([1, 1])
-    track = c1.radio("구분", ["해당 없음", "신규 투입", "복귀(7일 이상 쉼)"],
-                     help="처음 폭염작업을 하거나, 연속 7일 이상 작업하지 않다가 복귀한 경우")
-    ratio = None
-    if track != "해당 없음":
-        day = c2.number_input("투입 며칠째인가요?", 1, 30, 1)
-        ratio = acclim_ratio(day, track.startswith("복귀"))
-        if ratio is not None:
-            hits.append("newcomer")
-
-    # ---- 2단계: 건강 상태 (①②④⑤⑧) ----
-    st.markdown("##### 2. 해당하는 항목을 체크하세요")
-    st.caption("⚠️ 아래 정보는 저장되지 않으며, 본인 판단을 돕기 위한 것입니다")
-    h1, h2 = st.columns(2)
-    if h1.checkbox("만성질환이 있음 (고혈압·저혈압·당뇨·심혈관·신장 등)"):
-        hits.append("chronic")
-    if h1.checkbox("과거 온열질환을 겪은 적 있음"):
-        hits.append("history")
-    if h1.checkbox("만 65세 이상"):
-        hits.append("elderly")
-    if h2.checkbox("체온 조절·수분에 영향 주는 약을 복용 중"):
-        hits.append("medication")
-    if h2.checkbox("전날 과음했거나 잠을 못 잤음 / 탈수 느낌"):
-        hits.append("acute")
-    if h2.checkbox("오늘 고강도 작업 (형틀·철근·타설·용접 등)"):
-        hits.append("heavy")
-
-    st.divider()
-
-    # ---- 3단계: 자각증상 ----
-    st.markdown("##### 3. 지금 느껴지는 증상")
-    st.caption("행정안전부 온열질환 자각증상 점검표")
     checked = []
     s1, s2 = st.columns(2)
-    for i, s in enumerate(SYMPTOMS):
+    for i, sym in enumerate(SYMPTOMS):
         col = s1 if i < 4 else s2
-        if col.checkbox(s, key=f"sym_{i}"):
-            checked.append(s)
+        if col.checkbox(sym, key=f"sym_{i}"):
+            checked.append(sym)
+
+    # ⑧ 일시적 건강저하는 매일 바뀌므로 본인만 안다 (명부로 관리 불가)
+    acute = st.checkbox("전날 과음했거나 잠을 못 잤음 / 탈수 느낌",
+                        help="지침 민감군 ⑧ 일시적 건강상태 저하")
 
     st.divider()
-
-    # ---- 결과 ----
     n = len(checked)
+
+    # ---- 2) 결과 ----
     if n >= SYMPTOM_THRESHOLD:
-        st.error(f"⚠️ 증상 {n}개 — 지금 즉시 아래 조치를 하고 관리자·동료에게 알리세요",
-                 icon="🚨")
+        st.error(f"⚠️ 증상 {n}개 — 지금 즉시 아래 조치를 하고 "
+                 "관리자·동료에게 알리세요", icon="🚨")
         for i, a in enumerate(SYMPTOM_ACTIONS, 1):
             st.markdown(f"**{i}.** {a}")
         st.markdown(
-            '<div style="background:#7F1D1D;color:#fff;padding:14px;'
-            'border-radius:8px;text-align:center;font-size:19px;font-weight:800;">'
+            '<div style="background:#7F1D1D;color:#fff;padding:16px;'
+            'border-radius:8px;text-align:center;font-size:20px;font-weight:800;">'
             '증상이 개선되지 않으면 즉시 119</div>', unsafe_allow_html=True)
-        st.caption("판단이 어려운 경우에도 즉시 119에 신고 후 응급조치하세요.")
-        st.divider()
-    elif n == 1:
-        st.warning(f"증상 {n}개 — 시원한 곳에서 휴식하고 수분을 보충하세요. "
-                   "증상이 늘어나면 즉시 알리세요.")
-
-    if hits:
-        labels = [f"{type_by_code(c).no} {type_by_code(c).label}" for c in hits]
-        st.markdown(
-            f"""<div style="background:#FEF3C7;border-left:6px solid #F59E0B;
-                    padding:14px 16px;border-radius:8px;">
-              <div style="font-size:17px;font-weight:700;color:#92400E;">
-                  나는 오늘 온열질환 민감군입니다</div>
-              <div style="font-size:13px;color:#78350F;margin-top:6px;">
-                  해당: {' · '.join(labels)}</div>
-            </div>""", unsafe_allow_html=True)
-
-        st.markdown("**오늘 나에게 적용되는 조치**")
-        acts = []
-        if ratio is not None:
-            acts.append(f"🔸 **열순응 {ratio}%** — 오늘은 정상 작업량의 {ratio}%까지만 "
-                        f"작업하세요 ({track})")
-        if day_tier_code == "CRITICAL":
-            acts.append("🔸 **옥외작업 제한** — 체감온도 38℃ 이상입니다. "
-                        "관리자에게 배치 조정을 요청하세요")
-        acts.append("🔸 휴식시간을 추가로 배정받을 수 있습니다")
-        acts.append("🔸 작업시간 단축을 요청할 수 있습니다")
-        for a in acts:
-            st.markdown(a)
-
-        st.info("📢 **이 화면을 관리자에게 보여주세요.** 민감군은 아침 조회(TBM)에서 "
-                "별도 관리 대상입니다.")
-    elif n < SYMPTOM_THRESHOLD:
-        st.success("현재 해당하는 민감군 항목과 증상이 없습니다. "
-                   "그래도 갈증을 느끼기 전에 물을 자주 드세요.")
-
-    # ---- 관리자에게 알리기 ----
-    if n >= SYMPTOM_THRESHOLD:
+        st.caption("증상을 판단하기 어려운 경우에도 즉시 119에 신고 후 응급조치하세요.")
         st.divider()
         R.render_submit(n)
 
-    st.caption("근거: 고용노동부 「폭염 대비 사업장 대응지침」(2026.5) 18~19쪽")
+    elif n == 1:
+        st.warning("증상 1개 — 시원한 곳에서 휴식하고 수분을 보충하세요. "
+                   "증상이 하나라도 늘면 즉시 알리세요.")
+    elif acute:
+        st.warning("컨디션 저하 상태입니다. 오늘은 무리하지 말고 "
+                   "휴식을 더 요청하세요. 관리자에게 미리 알리는 것이 좋습니다.")
+    else:
+        st.success("체크된 증상이 없습니다. 갈증을 느끼기 전에 물을 자주 드세요.")
+
+    # ---- 3) 내 열순응 단계 (선택) ----
+    st.divider()
+    with st.expander("🔍 내 열순응 단계 확인하기 (신규 투입·복귀자)"):
+        st.caption("처음 폭염작업을 하거나, 연속 7일 이상 쉬었다가 복귀한 경우")
+        c1, c2 = st.columns(2)
+        track = c1.radio("구분", ["신규 투입", "복귀(7일 이상 쉼)"], key="acc_track")
+        day = c2.number_input("투입 며칠째", 1, 30, 1, key="acc_day")
+        ratio = acclim_ratio(day, track.startswith("복귀"))
+        if ratio is not None:
+            st.markdown(
+                f'<div style="background:#FEF3C7;border-left:6px solid #F59E0B;'
+                f'padding:14px 16px;border-radius:8px;">'
+                f'<div style="font-size:15px;color:#92400E;">오늘 허용 작업량</div>'
+                f'<div style="font-size:34px;font-weight:800;color:#B45309;'
+                f'line-height:1.2;">{ratio}%</div>'
+                f'<div style="font-size:13px;color:#78350F;">'
+                f'{track} {day}일차 · 정상 작업량의 {ratio}%까지만 작업하세요</div>'
+                f'</div>', unsafe_allow_html=True)
+            if day <= 2:
+                st.error("⚠️ 온열질환 사망자의 **70.9%가 투입 1~2일차**에 발생합니다. "
+                         "무리하지 마세요.", icon="🚨")
+            if day_tier_code == "CRITICAL":
+                st.error("🚫 체감온도 38℃ 이상 — 민감군 옥외작업 제한 대상입니다. "
+                         "관리자에게 배치 조정을 요청하세요.")
+        else:
+            st.info("6일차 이상 — 열순응 프로그램이 완료되었습니다.")
+        st.caption(f"근거: {ACCLIM_SRC}")
+
+    # ---- 4) 권리 고지 ----
+    st.info("""**내가 요청할 수 있는 것**
+
+- 만성질환·고령(65세 이상)·신규배치·고강도 작업에 해당하면 **온열질환 민감군**입니다
+- 민감군은 체감온도 31℃ 이상에서 **휴식시간 추가 배정**과 **작업시간 단축**을 받을 수 있습니다
+- 건강상 이유로 **작업중지를 요청할 권리**가 있습니다""")
+
+    st.caption("체크 내용은 저장되지 않습니다 · "
+               "근거: 고용노동부 「폭염 대비 사업장 대응지침」(2026.5) 14·18~19쪽")
 
 
 def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
