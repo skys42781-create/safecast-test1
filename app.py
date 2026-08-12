@@ -27,7 +27,21 @@ import requests
 import streamlit as st
 
 KST = ZoneInfo("Asia/Seoul")
-BASE_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
+
+# ---------------------------------------------------------------------
+# 기상청 API 제공처 선택
+#   True  → 기상청 API허브 (apihub.kma.go.kr).  인증 파라미터: authKey
+#   False → 공공데이터포털 (data.go.kr).        인증 파라미터: serviceKey (Decoding 키)
+# 두 곳은 응답 형식이 같고 인증 방식만 다르다.
+# ---------------------------------------------------------------------
+USE_APIHUB = True
+
+if USE_APIHUB:
+    BASE_URL = "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0"
+    KEY_PARAM = "authKey"
+else:
+    BASE_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
+    KEY_PARAM = "serviceKey"
 
 
 # =====================================================================
@@ -219,7 +233,7 @@ def latest_ncst_base(now: datetime) -> tuple[str, str]:
 def fetch_now(nx: int, ny: int, key: str, bd: str, bt: str) -> dict:
     """초단기실황 → {T1H: 기온, REH: 습도, ...}"""
     r = requests.get(f"{BASE_URL}/getUltraSrtNcst", timeout=15, params={
-        "serviceKey": key, "pageNo": 1, "numOfRows": 100, "dataType": "JSON",
+        KEY_PARAM: key, "pageNo": 1, "numOfRows": 100, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
     r.raise_for_status()
     items = r.json()["response"]["body"]["items"]["item"]
@@ -233,7 +247,7 @@ def fetch_forecast(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame
     ⚠️ numOfRows는 1000 이상. 300이면 뒤쪽 시간대가 잘려 0℃로 표시된다.
     """
     r = requests.get(f"{BASE_URL}/getVilageFcst", timeout=20, params={
-        "serviceKey": key, "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
+        KEY_PARAM: key, "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
     r.raise_for_status()
     items = r.json()["response"]["body"]["items"]["item"]
@@ -473,15 +487,38 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
 def main() -> None:
     st.set_page_config(page_title="Safecast", page_icon="🏗️", layout="wide")
 
-    kakao = st.secrets.get("KAKAO_KEY", "")
-    kma = st.secrets.get("KMA_KEY", "")
+    # secrets.toml 파일 자체가 없으면 st.secrets 접근이 예외를 던진다 (로컬 첫 실행)
+    try:
+        kakao = st.secrets.get("KAKAO_KEY", "")
+        kma = st.secrets.get("KMA_KEY", "")
+    except Exception:
+        kakao = kma = ""
 
     with st.sidebar:
         st.header("⚙️ 관제 설정")
-        place = st.text_input("현장 위치", placeholder="예: 국민대학교")
+
+        if kakao:
+            place = st.text_input("현장 위치", placeholder="예: 국민대학교")
+            manual = None
+        else:
+            # 카카오 키가 없으면 위경도 직접 입력으로 대체
+            place = ""
+            st.caption("📍 카카오 키 미등록 — 위경도 직접 입력")
+            preset = st.selectbox("빠른 선택", [
+                "직접 입력", "서울시청", "부산시청", "강릉", "제주시청", "국민대학교"])
+            _P = {"서울시청": (37.5665, 126.9780), "부산시청": (35.1798, 129.0750),
+                  "강릉": (37.7519, 128.8761), "제주시청": (33.4996, 126.5312),
+                  "국민대학교": (37.6109, 126.9968)}
+            if preset == "직접 입력":
+                c1, c2 = st.columns(2)
+                manual = (c1.number_input("위도", value=37.5665, format="%.4f"),
+                          c2.number_input("경도", value=126.9780, format="%.4f"),
+                          "직접 입력 지점")
+            else:
+                manual = (*_P[preset], preset)
 
         st.divider()
-        demo = st.toggle("데모 모드 (API 미사용)", value=not (kakao and kma),
+        demo = st.toggle("데모 모드 (API 미사용)", value=not kma,
                          help="API 키 없이 시연. 심사 중 API 장애 대비 fallback.")
         peak = st.slider("[데모] 오늘 최고기온", 26.0, 42.0, 36.0, 0.5) if demo else 36.0
 
@@ -491,8 +528,8 @@ def main() -> None:
         conservative = st.toggle("보수적 MAX 적용", value=True,
                                  help="끄면 블록 평균 기준. A/B 비교 시연용.")
 
-        if not demo and not (kakao and kma):
-            st.error("secrets에 KAKAO_KEY / KMA_KEY를 등록하세요.")
+        if not demo and not kma:
+            st.error("secrets.toml에 KMA_KEY를 등록하세요.")
 
     st.title("🏗️ Safecast")
     st.caption("건설현장 폭염 관제 시스템 · 산업안전보건기준에 관한 규칙(2025.7 개정) 기준")
@@ -500,6 +537,8 @@ def main() -> None:
     # ---------- 위치 ----------
     if demo:
         lat, lon, name = 37.4979, 127.0276, place or "데모 현장"
+    elif manual:
+        lat, lon, name = manual
     else:
         if not place:
             st.info("사이드바에 현장 위치를 입력하세요.")
