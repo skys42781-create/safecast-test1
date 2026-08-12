@@ -35,8 +35,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-import reports as R
-
 # =====================================================================
 # SECTION A. 민감군 정의 (대응지침 18쪽 그대로)
 # =====================================================================
@@ -461,7 +459,10 @@ def render_worker_check(day_tier_code: str = "NORMAL") -> None:
             '증상이 개선되지 않으면 즉시 119</div>', unsafe_allow_html=True)
         st.caption("증상을 판단하기 어려운 경우에도 즉시 119에 신고 후 응급조치하세요.")
         st.divider()
-        R.render_submit(n)
+        st.warning("📢 **지금 바로 관리자 또는 옆 동료에게 알리세요.** "
+                   "혼자 참지 마세요.", icon="🗣️")
+        st.caption("근거: 대응지침 18쪽 — 2개 이상의 증상이 있는 경우 "
+                   "사업주 또는 동료근로자 등에게 알리고, 판단이 어려우면 즉시 119")
 
     elif n == 1:
         st.warning("증상 1개 — 시원한 곳에서 휴식하고 수분을 보충하세요. "

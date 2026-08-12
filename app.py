@@ -27,7 +27,6 @@ import requests
 import streamlit as st
 
 import tbm as T
-import reports as R
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -698,17 +697,9 @@ def main() -> None:
                 f"오늘 중 조치: 공정계획 조정 · 쉼터/음용수 물량 확보 · "
                 f"민감군 배치 재검토 · 조기출근 전환 검토", icon="🚨")
 
-    # 미확인 신고가 있으면 탭 이름에 표시
-    _pending = 0
-    if R.is_enabled():
-        _rp = R.load_reports()
-        if not _rp.empty:
-            _pending = int((_rp["처리상태"] == "미확인").sum())
-    _rtab = f"🚨 증상 신고 ({_pending})" if _pending else "🚨 증상 신고"
-
-    t1, t2, t6, t4, t5, t3 = st.tabs(
+    t1, t2, t6, t4, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-         "⏰ 휴식 알람", "👷 TBM 타겟 명단", _rtab, "📖 법적 근거"])
+         "⏰ 휴식 알람", "👷 TBM 타겟 명단", "📖 법적 근거"])
 
     with t1:
         if today_df.empty:
@@ -753,9 +744,6 @@ def main() -> None:
 
         st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
-
-    with t5:
-        R.render_admin_reports()
 
     with t3:
         st.dataframe(pd.DataFrame([{
