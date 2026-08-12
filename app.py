@@ -335,17 +335,35 @@ def fetch_forecast(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame
     return wide[["datetime", "ta", "rh"]].dropna().sort_values("datetime")
 
 
-def demo_forecast(start: date, days: int = 2, peak: float = 36.0) -> pd.DataFrame:
-    """API 없이 시연하기 위한 더미. 심사 중 API 장애 대비 fallback."""
+def _ta_for_at(target_at: float, rh: float) -> float:
+    """주어진 습도에서 목표 체감온도가 나오는 기온을 역산 (이분법)."""
+    lo, hi = 5.0, 55.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if apparent_temp(mid, rh) < target_at:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def demo_forecast(start: date, days: int = 2, peak_at: float = 34.0,
+                  rh: float = 60.0) -> pd.DataFrame:
+    """API 없이 시연하기 위한 더미. 심사 중 API 장애 대비 fallback.
+
+    peak_at은 '기온'이 아니라 '목표 최고 체감온도'다.
+    등급 판정이 체감온도 기준이므로, 슬라이더와 화면이 어긋나지 않도록
+    지정한 습도에서 해당 체감온도가 나오는 기온을 역산한다.
+    """
     rows = []
     for d in range(days):
         day = start + timedelta(days=d)
-        p = peak - d * 1.5
+        peak_ta = _ta_for_at(peak_at - d * 1.5, rh)      # 내일은 조금 낮게
         for h in range(24):
-            ta = max(p - 9.5 * (1 - math.sin(math.pi * max(h - 5, 0) / 20)) ** 1.3, p - 11)
+            ta = max(peak_ta - 9.5 * (1 - math.sin(math.pi * max(h - 5, 0) / 20)) ** 1.3,
+                     peak_ta - 11)
             rows.append({"datetime": datetime.combine(day, time(h)),
-                         "ta": round(ta, 1),
-                         "rh": round(float(np.clip(88 - (ta - 23) * 3.2, 35, 95)))})
+                         "ta": round(ta, 1), "rh": round(rh)})
     return pd.DataFrame(rows)
 
 
@@ -627,7 +645,13 @@ def main() -> None:
         st.divider()
         demo = st.toggle("데모 모드 (API 미사용)", value=not kma,
                          help="API 키 없이 시연. 심사 중 API 장애 대비 fallback.")
-        peak = st.slider("[데모] 오늘 최고기온", 26.0, 42.0, 36.0, 0.5) if demo else 36.0
+        if demo:
+            peak = st.slider("[데모] 오늘 최고 체감온도", 26.0, 42.0, 34.0, 0.5,
+                             help="등급 판정 기준인 '체감온도'를 직접 지정합니다")
+            demo_rh = st.slider("[데모] 습도(%)", 35, 95, 60, 5,
+                                help="같은 기온이라도 습도가 높으면 체감온도가 올라갑니다")
+        else:
+            peak, demo_rh = 34.0, 60.0
 
         st.divider()
         lead = LEAD_OPTIONS[st.radio("사전 알람 시점", list(LEAD_OPTIONS.keys()),
@@ -674,7 +698,7 @@ def main() -> None:
 
     # ---------- 데이터 ----------
     if demo:
-        fc = enrich(demo_forecast(today, 2, peak))
+        fc = enrich(demo_forecast(today, 2, peak, demo_rh))
         ncst, ncst_dt, ufc, src = None, None, None, "🟡 데모 데이터"
     else:
         try:
@@ -683,7 +707,7 @@ def main() -> None:
             src = f"🟢 단기예보 {bt[:2]}시 발표"
         except Exception as e:
             st.error(f"예보 API 실패 → 데모 데이터 대체\n\n`{e}`")
-            fc, src = enrich(demo_forecast(today, 2, 36.0)), "🔴 API 실패"
+            fc, src = enrich(demo_forecast(today, 2, 34.0)), "🔴 API 실패"
         try:
             nb, nt = latest_ncst_base(now)
             ncst = fetch_now(nx, ny, kma, nb, nt)
