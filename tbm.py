@@ -35,6 +35,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+import reports as R
+
 # =====================================================================
 # SECTION A. 민감군 정의 (대응지침 18쪽 그대로)
 # =====================================================================
@@ -402,6 +404,11 @@ def render_worker_check(day_tier_code: str = "NORMAL") -> None:
     elif n < SYMPTOM_THRESHOLD:
         st.success("현재 해당하는 민감군 항목과 증상이 없습니다. "
                    "그래도 갈증을 느끼기 전에 물을 자주 드세요.")
+
+    # ---- 관리자에게 알리기 ----
+    if n >= SYMPTOM_THRESHOLD:
+        st.divider()
+        R.render_submit(n)
 
     st.caption("근거: 고용노동부 「폭염 대비 사업장 대응지침」(2026.5) 18~19쪽")
 
