@@ -799,6 +799,15 @@ def main() -> None:
                 f"오늘 중 조치: 공정계획 조정 · 쉼터/음용수 물량 확보 · "
                 f"민감군 배치 재검토 · 조기출근 전환 검토", icon="🚨")
 
+    # ⚠️ Streamlit은 모든 탭 본문을 매 실행마다 위에서부터 평가한다.
+    #    명부 로딩을 탭 안에 두면 '휴식 알람'(먼저 평가)이 이전 명부를 쓰게 되므로
+    #    탭보다 먼저 한 번만 로드한다.
+    roster = st.session_state.get("_roster")
+    if roster is None:
+        roster = T.make_demo_roster()
+        st.session_state["_roster"] = roster
+    day_tbm = T.build_tbm(roster, day_tier.code)
+
     t1, t2, t6, t4, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
          "⏰ 휴식 알람", "👷 TBM 타겟 명단", "📖 법적 근거"])
@@ -819,8 +828,7 @@ def main() -> None:
         st.caption("휴식 시각별로 전원 휴식과 추가 배정 대상을 함께 산출합니다.")
         _blocks = build_blocks(today_df, today, conservative) if not today_df.empty \
             else pd.DataFrame()
-        _tbm = T.build_tbm(st.session_state.get("_roster", T.make_demo_roster()),
-                           day_tier.code)
+        _tbm = day_tbm
         if _blocks.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
@@ -838,15 +846,15 @@ def main() -> None:
             help="컬럼: " + ", ".join(T.ROSTER_COLUMNS))
         if up is not None:
             try:
-                roster = T.normalize_roster(pd.read_csv(up))
+                new_roster = T.normalize_roster(pd.read_csv(up))
+                if not new_roster.equals(roster):
+                    st.session_state["_roster"] = new_roster
+                    st.rerun()          # 모든 탭이 같은 명부를 쓰도록 즉시 재실행
                 st.success(f"출역 명부 {len(roster)}명 로드")
             except Exception as e:
-                st.error(f"CSV 읽기 실패 → 더미로 대체\n\n`{e}`")
-                roster = T.make_demo_roster()
+                st.error(f"CSV 읽기 실패 → 기존 명부 유지\n\n`{e}`")
         else:
-            roster = T.make_demo_roster()
             st.caption("🟡 시연용 더미 명부 — 실제 현장에서는 출역시스템 CSV/DB 연동")
-        st.session_state["_roster"] = roster
 
         st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
