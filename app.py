@@ -229,6 +229,39 @@ def latest_ncst_base(now: datetime) -> tuple[str, str]:
     return t.strftime("%Y%m%d"), t.strftime("%H00")
 
 
+def latest_ultra_base(now: datetime) -> tuple[str, str]:
+    """초단기예보: 매시 30분 발표(45분 제공), 발표시각+1h부터 6시간 제공.
+
+    현재 시각을 커버하려면 '1시간 전 30분' 발표본을 써야 한다.
+    예) 11:50 조회 → 10:30 발표본(10:45 제공) → 11:00~16:00 예보 포함
+    """
+    t = now - timedelta(hours=1)
+    return t.strftime("%Y%m%d"), t.strftime("%H30")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_ultra_fcst(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame:
+    """초단기예보 → [datetime, ta, rh]. 실황이 아직 안 나온 현재 시각을 메운다."""
+    r = requests.get(f"{BASE_URL}/getUltraSrtFcst", timeout=15, params={
+        KEY_PARAM: key, "pageNo": 1, "numOfRows": 300, "dataType": "JSON",
+        "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
+    r.raise_for_status()
+    items = r.json()["response"]["body"]["items"]["item"]
+
+    raw = pd.DataFrame(items)
+    want = {"T1H": "ta", "REH": "rh"}
+    raw = raw[raw["category"].isin(want)]
+    wide = raw.pivot_table(index=["fcstDate", "fcstTime"], columns="category",
+                           values="fcstValue", aggfunc="first").reset_index()
+    wide.columns.name = None
+    wide = wide.rename(columns=want)
+    wide["datetime"] = pd.to_datetime(wide["fcstDate"] + wide["fcstTime"],
+                                      format="%Y%m%d%H%M")
+    for c in ["ta", "rh"]:
+        wide[c] = pd.to_numeric(wide[c], errors="coerce")
+    return wide[["datetime", "ta", "rh"]].dropna().sort_values("datetime")
+
+
 @st.cache_data(ttl=600, show_spinner="기상청 실황 수신 중…")
 def fetch_now(nx: int, ny: int, key: str, bd: str, bt: str) -> dict:
     """초단기실황 → {T1H: 기온, REH: 습도, ...}"""
@@ -556,7 +589,7 @@ def main() -> None:
     # ---------- 데이터 ----------
     if demo:
         fc = enrich(demo_forecast(today, 2, peak))
-        ncst, src = None, "🟡 데모 데이터"
+        ncst, ncst_dt, ufc, src = None, None, None, "🟡 데모 데이터"
     else:
         try:
             bd, bt = latest_fcst_base(now)
@@ -568,24 +601,50 @@ def main() -> None:
         try:
             nb, nt = latest_ncst_base(now)
             ncst = fetch_now(nx, ny, kma, nb, nt)
+            ncst_dt = datetime.strptime(nb + nt, "%Y%m%d%H%M")
         except Exception:
-            ncst = None
+            ncst, ncst_dt = None, None
+        try:
+            ub, ut = latest_ultra_base(now)
+            ufc = fetch_ultra_fcst(nx, ny, kma, ub, ut)
+        except Exception:
+            ufc = None
 
     fc = fc[fc["day"].isin([today, tomorrow])]
     st.success(f"📍 **{name}** · 격자 (nx={nx}, ny={ny}) · {src}")
 
-    # ---------- 현재 실황 ----------
+    # ---------- 현재 상황 (관측 + 현재시각 추정) ----------
     if ncst and "T1H" in ncst and "REH" in ncst:
-        cta, crh = ncst["T1H"], ncst["REH"]
-        cat = apparent_temp(cta, crh)
-        ct = classify(cat)
+        obs_ta, obs_rh = ncst["T1H"], ncst["REH"]
+        obs_at = apparent_temp(obs_ta, obs_rh)
+
+        # 실황은 정시 관측 + 40분 지연 → 그 사이는 초단기예보로 메운다
+        cur_ta, cur_rh, cur_src, cur_dt = obs_ta, obs_rh, "관측", ncst_dt
+        if ufc is not None and not ufc.empty and ncst_dt is not None:
+            newer = ufc[(ufc["datetime"] > ncst_dt) &
+                        (ufc["datetime"] <= now.replace(minute=0, second=0, microsecond=0))]
+            if not newer.empty:
+                last = newer.iloc[-1]
+                cur_ta, cur_rh = float(last["ta"]), float(last["rh"])
+                cur_src, cur_dt = "초단기예보", last["datetime"].to_pydatetime()
+
+        cur_at = apparent_temp(cur_ta, cur_rh)
+        ct = classify(cur_at)
+
         m = st.columns(4)
-        m[0].metric("현재 기온", f"{cta}℃")
-        m[1].metric("현재 습도", f"{crh}%")
-        m[2].metric("현재 체감온도", f"{cat}℃", delta=f"+{cat - cta:.1f}℃")
+        m[0].metric("현재 기온", f"{cur_ta}℃")
+        m[1].metric("현재 습도", f"{cur_rh}%")
+        m[2].metric("현재 체감온도", f"{cur_at}℃", delta=f"+{cur_at - cur_ta:.1f}℃")
         m[3].metric("현재 등급", ct.short, delta=ct.legal, delta_color="off")
-        st.caption("⚠️ 기상청 격자(5km) 값입니다. 현장 실측이 아니며, "
-                   "철골·콘크리트면은 이보다 높을 수 있습니다.")
+
+        stamp = f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src
+        note = f"📡 {stamp} 기준"
+        if cur_src == "초단기예보" and ncst_dt:
+            note += f" · 최종 관측 {ncst_dt:%H:%M} {obs_ta}℃ (체감 {obs_at}℃)"
+        st.caption(
+            note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
+            "철골·콘크리트면은 이보다 높을 수 있습니다."
+        )
 
     today_df, tmr_df = fc[fc["day"] == today], fc[fc["day"] == tomorrow]
 
