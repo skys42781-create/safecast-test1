@@ -139,12 +139,29 @@ class WorkBlock:
     is_work: bool = True
 
 
-WORK_BLOCKS: list[WorkBlock] = [
+# ---------------------------------------------------------------------
+# 공정 블록 구성
+#   피크(14~17시)는 대응지침 14쪽의 '무더위 시간대'로 법정 구간이므로 쪼개지 않는다.
+#   반면 오전 4시간은 우리가 임의로 잡은 구간이며, 보수적 MAX와 결합하면
+#   1시간 스파이크로 4시간 전체가 상향되어 과대 등급이 발생한다.
+#   → 오전만 2시간 단위로 세분한다. (🔵 설정: 지침 미규정, 현장 조정 가능)
+# ---------------------------------------------------------------------
+WORK_BLOCKS_FINE: list[WorkBlock] = [
+    WorkBlock("morning1", "오전 1부", 8, 10),
+    WorkBlock("morning2", "오전 2부", 10, 12),
+    WorkBlock("lunch", "점심·휴게", 12, 14, is_work=False),
+    WorkBlock("peak", "피크 (무더위 시간대)", 14, 17),
+    WorkBlock("closing", "마무리·철수", 17, 18),
+]
+
+WORK_BLOCKS_COARSE: list[WorkBlock] = [
     WorkBlock("morning", "오전 작업", 8, 12),
     WorkBlock("lunch", "점심·휴게", 12, 14, is_work=False),
     WorkBlock("peak", "피크 (무더위 시간대)", 14, 17),
     WorkBlock("closing", "마무리·철수", 17, 18),
 ]
+
+WORK_BLOCKS = WORK_BLOCKS_FINE          # 기본값
 
 LEAD_OPTIONS = {"20분 (소규모 현장)": 20, "30분 (대규모·고층 현장)": 30}
 
@@ -379,7 +396,8 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 # SECTION 4. 알고리즘 1 — 블록화 + 보수적 MAX
 # =====================================================================
 
-def build_blocks(day_df: pd.DataFrame, target: date, conservative: bool = True) -> pd.DataFrame:
+def build_blocks(day_df: pd.DataFrame, target: date, conservative: bool = True,
+                 blocks_def: list[WorkBlock] | None = None) -> pd.DataFrame:
     """1시간 예보 → 공정 블록 재집계.
 
     [보수적 MAX]
@@ -387,7 +405,7 @@ def build_blocks(day_df: pd.DataFrame, target: date, conservative: bool = True) 
       본 시스템은 인체 열 축적을 근거로 같은 원칙을 시간축으로 확장한다.
     """
     rows = []
-    for b in WORK_BLOCKS:
+    for b in (blocks_def or WORK_BLOCKS):
         c = day_df[(day_df["hour"] >= b.start_h) & (day_df["hour"] < b.end_h)]
         if c.empty:
             continue
@@ -500,10 +518,11 @@ def block_card(r: pd.Series) -> str:
 </div>"""
 
 
-def timeline(df: pd.DataFrame, title: str) -> go.Figure:
+def timeline(df: pd.DataFrame, title: str,
+             blocks_def: list[WorkBlock] | None = None) -> go.Figure:
     fig = go.Figure()
     for d in sorted(df["day"].unique()):
-        for b in WORK_BLOCKS:
+        for b in (blocks_def or WORK_BLOCKS):
             if not b.is_work:
                 continue
             s = df[(df["day"] == d) & (df["hour"] >= b.start_h) & (df["hour"] < b.end_h)]
@@ -532,8 +551,9 @@ def timeline(df: pd.DataFrame, title: str) -> go.Figure:
 
 
 def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int,
-               strict: bool = False) -> None:
-    blocks = build_blocks(day_df, target, conservative)
+               strict: bool = False,
+               blocks_def: list[WorkBlock] | None = None) -> None:
+    blocks = build_blocks(day_df, target, conservative, blocks_def)
     if blocks.empty:
         st.warning("해당 일자의 예보 데이터가 없습니다.")
         return
@@ -583,7 +603,7 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
         for _, r in blocks.iterrows():
             st.markdown(block_card(r), unsafe_allow_html=True)
     with R:
-        st.plotly_chart(timeline(day_df, f"{target:%m월 %d일} 체감온도"),
+        st.plotly_chart(timeline(day_df, f"{target:%m월 %d일} 체감온도", blocks_def),
                         use_container_width=True)
 
         st.markdown("##### 블록별 휴식 계획")
@@ -662,6 +682,11 @@ def main() -> None:
                                 "여전히 2시간마다 20분입니다.")
         conservative = st.toggle("보수적 MAX 적용", value=True,
                                  help="끄면 블록 평균 기준. A/B 비교 시연용.")
+        block_mode = st.radio(
+            "공정 블록 구성", ["세분 (오전 2+2h)", "통합 (오전 4h)"],
+            help="피크 14~17시는 법정 구간이라 고정. 오전 구간만 조정합니다.")
+        blocks_def = WORK_BLOCKS_FINE if block_mode.startswith("세분") \
+            else WORK_BLOCKS_COARSE
         extra_min = st.slider("민감군 추가 휴식(분)", 0, 30, 10, 5,
                               help="지침은 '추가 배정'을 요구하나 분량 미규정 — 현장 설정. "
                                    "기본 10분은 지침 우수사례 기준")
@@ -816,17 +841,18 @@ def main() -> None:
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
-            render_day(today_df, today, conservative, lead, strict)
+            render_day(today_df, today, conservative, lead, strict, blocks_def)
 
     with t2:
         if tmr_df.empty:
             st.warning("내일 예보 데이터가 없습니다.")
         else:
-            render_day(tmr_df, tomorrow, conservative, lead, strict)
+            render_day(tmr_df, tomorrow, conservative, lead, strict, blocks_def)
 
     with t6:
         st.caption("휴식 시각별로 전원 휴식과 추가 배정 대상을 함께 산출합니다.")
-        _blocks = build_blocks(today_df, today, conservative) if not today_df.empty \
+        _blocks = build_blocks(today_df, today, conservative, blocks_def) \
+            if not today_df.empty \
             else pd.DataFrame()
         _tbm = day_tbm
         if _blocks.empty:
