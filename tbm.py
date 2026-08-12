@@ -1,764 +1,517 @@
 """
-Safecast — 스마트 건설 폭염 관제 대시보드
-==========================================
-건설현장 온열질환 예방을 위한 체감온도 기반 작업 통제 시스템.
-산업안전보건기준에 관한 규칙(2025.7 개정) 기준.
+Safecast — TBM(작업 전 안전점검회의) 타겟 관리 모듈
+====================================================
+아침 조회에서 "오늘 누구를 집중 관리해야 하는가"를 자동 산출한다.
 
-실행:
-    pip install -r requirements.txt
-    streamlit run app.py
+[이 기능이 필요한 이유 — 고용노동부 대응지침 19쪽]
+    7년간('18~'24) 온열질환 산재 사망자 31명 중 25명(80.6%)이 투입 후 7일 이내 발생.
+    투입 첫날 13명(41.9%), 둘째날 9명(29.0%), 3~7일 3명(9.7%).
+    → 사망자의 41.9%가 '첫날'이다. 명단을 아침에 알아야 막을 수 있다.
 
-.streamlit/secrets.toml
-    KAKAO_KEY = "카카오 REST API 키"
-    KMA_KEY   = "공공데이터포털 기상청 일반인증키(Decoding)"
+[설계 원칙]
+    ① 시스템은 '선별·기록'하고, '판정'하지 않는다.
+       근로 금지·제한은 산업안전보건법 제138조상 의사의 진단 사항이다.
+    ② 혈압 등 수치는 수집하지 않는다.
+       폭염 관련 법령·지침에 판정 기준이 없고, 활용 못 할 민감정보 보관은
+       개인정보 보호법의 최소수집 원칙에 반한다.
+    ③ 질환명은 목록에 노출하지 않는다.
+       산업안전보건법 제132조제2항 — 개별 근로자의 건강진단 결과는
+       본인 동의 없이 공개할 수 없다.
+
+[출처]
+    고용노동부, 「온열질환 예방을 위한 폭염 대비 사업장 대응지침」, 2026.5
+      · 민감군 대상 및 관리방법 … 18쪽
+      · 열순응 프로그램 예시 …… 19쪽
+      · 자각증상 점검표(행정안전부) … 18쪽
+      · 35℃/38℃ 조치사항 ……… 14쪽
+    질병관리청 폭염 취약집단 분석 (고령 65세 기준)
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-import requests
 import streamlit as st
 
-import tbm as T
-
-KST = ZoneInfo("Asia/Seoul")
-
-# ---------------------------------------------------------------------
-# 기상청 API 제공처 선택
-#   True  → 기상청 API허브 (apihub.kma.go.kr).  인증 파라미터: authKey
-#   False → 공공데이터포털 (data.go.kr).        인증 파라미터: serviceKey (Decoding 키)
-# 두 곳은 응답 형식이 같고 인증 방식만 다르다.
-# ---------------------------------------------------------------------
-USE_APIHUB = True
-
-if USE_APIHUB:
-    BASE_URL = "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0"
-    KEY_PARAM = "authKey"
-else:
-    BASE_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
-    KEY_PARAM = "serviceKey"
-
-
 # =====================================================================
-# SECTION 0. 법적 기준 정의
+# SECTION A. 민감군 정의 (대응지침 18쪽 그대로)
 # =====================================================================
+
 
 @dataclass(frozen=True)
-class HeatTier:
-    min_temp: float
+class SensitiveType:
     code: str
-    label: str
-    short: str
-    color: str
-    legal: str
-    cycle_hours: float | None   # 휴식 주기(시간)
-    rest_minutes: int           # 1회 휴식(분)
-    stop_work: bool
-    actions: tuple[str, ...]
-
-    @property
-    def rest_ratio(self) -> float:
-        return self.rest_minutes / (self.cycle_hours * 60) if self.cycle_hours else 0.0
+    no: str          # 지침상 번호
+    label: str       # 화면 표시 (질환명 아님)
+    detail: str      # 보건관리자용 상세
+    auto: bool       # 출역 데이터로 자동 판정 가능한가
 
 
-# ※ 내림차순 정렬 필수 (classify가 위에서부터 검사)
-HEAT_TIERS: list[HeatTier] = [
-    HeatTier(38.0, "CRITICAL", "위험 (폭염중대경보)", "위험", "#7F1D1D", "권고", 1, 15, True, (
-        "긴급조치 작업 외 옥외작업 중지",
-        "온열질환 민감군 옥외작업 제한",
-        "업무담당자 건강상태 확인 강화",
-    )),
-    HeatTier(35.0, "SEVERE", "심각 (폭염경보)", "심각", "#DC2626", "권고", 1, 15, True, (
-        "매시간 15분 이상 휴식",
-        "14~17시 옥외작업 중지 (불가피한 경우 제외)",
-        "업무담당자 지정 후 근로자 건강상태 확인",
-    )),
-    HeatTier(33.0, "ALERT", "경계 (폭염주의보)", "경계", "#EA580C", "의무", 2, 20, False, (
-        "2시간 이내 20분 이상 휴식 부여  [법적 의무]",
-        "작업시간대 조정 또는 옥외작업 단축",
-        "체감온도·조치사항 일자별 기록 (연말까지 보관)",
-    )),
-    HeatTier(31.0, "CAUTION", "주의 (폭염작업)", "주의", "#F59E0B", "의무", None, 0, False, (
-        "폭염안전 5대 기본수칙 이행  [법적 의무]",
-        "작업장소 온·습도계 비치",
-        "2시간 이상 연속작업 지양",
-    )),
-    HeatTier(-99.0, "NORMAL", "관심 (평시)", "평시", "#16A34A", "-", None, 0, False, (
-        "평시 작업 / 수분 섭취 안내",
-    )),
+SENSITIVE_TYPES: list[SensitiveType] = [
+    SensitiveType("chronic", "①", "만성질환 보유",
+                  "고혈압, 저혈압, 당뇨, 뇌심혈관질환, 신장질환 등", False),
+    SensitiveType("history", "②", "온열질환 기왕력",
+                  "과거 온열질환 발생 이력", False),
+    SensitiveType("elderly", "③", "고령자",
+                  "만 65세 이상 (질병관리청: 65세 이상 중증화 위험 1.99배)", True),
+    SensitiveType("medication", "④", "약물 복용",
+                  "체온 조절·체액량 등 신체기능에 영향을 미치는 약물", False),
+    SensitiveType("alcohol", "⑤", "알코올 의존", "알코올 의존이 있는 사람", False),
+    SensitiveType("heavy", "⑥", "고강도 작업",
+                  "형틀·철근·콘크리트타설·용접 등 전신 사용, 중량물 반복 취급, "
+                  "삽질·망치질·톱질 등 공구 사용작업", True),
+    SensitiveType("newcomer", "⑦", "신규배치자",
+                  "열순응이 되지 않은 작업자", True),
+    SensitiveType("acute", "⑧", "일시적 건강저하",
+                  "전날 과음, 탈수 등", False),
+]
+
+# 지침 ⑥이 직접 예시로 든 공종. 출역 데이터의 공종만으로 자동 분류된다.
+HEAVY_TRADES = ["형틀", "철근", "콘크리트타설", "용접", "비계", "철골"]
+
+ELDERLY_AGE = 65   # 질병관리청 분석 기준 (30~64세 1.48배 → 65세 이상 1.99배)
+
+
+def type_by_code(code: str) -> SensitiveType:
+    return next(t for t in SENSITIVE_TYPES if t.code == code)
+
+
+# =====================================================================
+# SECTION B. 열순응 프로그램 (대응지침 19쪽 표 그대로)
+# =====================================================================
+
+# 신규직원(또는 온열질환 민감군)
+ACCLIM_NEW = {1: 20, 2: 40, 3: 60, 4: 80, 5: 100}
+# 복귀직원(이전에 열순응 되었으나 연속 7일 이상 작업하지 않은 근로자)
+ACCLIM_RETURN = {1: 50, 2: 60, 3: 70, 4: 80, 5: 100}
+
+ACCLIM_SRC = "고용노동부 대응지침(2026.5) 19쪽 「열순응 프로그램 예시」"
+
+
+def acclim_ratio(day: int, is_return: bool) -> int | None:
+    """투입 n일차의 허용 작업량(%). 6일차 이상은 제한 없음(None)."""
+    table = ACCLIM_RETURN if is_return else ACCLIM_NEW
+    return table.get(int(day))
+
+
+# =====================================================================
+# SECTION C. 자각증상 점검표 (행정안전부, 지침 18쪽)
+# =====================================================================
+
+SYMPTOMS = [
+    "평소보다 높은 체온",
+    "두통",
+    "어지러움",
+    "메스꺼움",
+    "근육 경련",
+    "지나치게 많은 땀을 흘림",
+    "구역질",
+    "갑작스런 피로감",
+]
+
+SYMPTOM_THRESHOLD = 2   # 2개 이상 "예" → 조치
+
+SYMPTOM_ACTIONS = [
+    "시원한 장소로 이동하세요",
+    "옷을 느슨하게 하고 몸에 시원한 물을 적시고 선풍기 등으로 몸을 식히세요",
+    "물을 섭취하도록 하여 수분을 보충하세요",
+    "증상이 개선되지 않으면 즉시 119에 신고하세요",
 ]
 
 
-@dataclass(frozen=True)
-class WorkBlock:
-    key: str
-    name: str
-    start_h: int
-    end_h: int
-    is_work: bool = True
+# =====================================================================
+# SECTION D. 출역 명부
+# =====================================================================
 
-
-WORK_BLOCKS: list[WorkBlock] = [
-    WorkBlock("morning", "오전 작업", 8, 12),
-    WorkBlock("lunch", "점심·휴게", 12, 14, is_work=False),
-    WorkBlock("peak", "피크 (무더위 시간대)", 14, 17),
-    WorkBlock("closing", "마무리·철수", 17, 18),
+ROSTER_COLUMNS = [
+    "성명", "공종", "연령", "투입일차", "복귀자",
+    "만성질환", "온열질환기왕력", "약물복용", "알코올의존", "일시적건강저하",
+    "옥외작업",
 ]
 
-LEAD_OPTIONS = {"20분 (소규모 현장)": 20, "30분 (대규모·고층 현장)": 30}
+# ⚠️ 질환명이 아니라 보유 여부(True/False)만 받는다.
+#    구체적 병명을 수집하면 개인정보 보호법상 부담만 커지고 판정에는 쓰이지 않는다.
 
 
-def classify(v: float) -> HeatTier:
-    for t in HEAT_TIERS:
-        if v >= t.min_temp:
-            return t
-    return HEAT_TIERS[-1]
+def make_demo_roster(n: int = 45, seed: int = 7) -> pd.DataFrame:
+    """시연용 더미 출역 명부.
 
-
-def tier_by_code(code: str) -> HeatTier:
-    return next(t for t in HEAT_TIERS if t.code == code)
-
-
-# =====================================================================
-# SECTION 1. 체감온도 (법정 기준 공식)
-# =====================================================================
-
-def wet_bulb(ta: float, rh: float) -> float:
-    """습구온도 근사 (Stull, 2011)."""
-    rh = float(np.clip(rh, 1.0, 100.0))
-    return (ta * math.atan(0.151977 * (rh + 8.313659) ** 0.5)
-            + math.atan(ta + rh) - math.atan(rh - 1.676331)
-            + 0.00391838 * rh ** 1.5 * math.atan(0.023101 * rh) - 4.686035)
-
-
-def apparent_temp(ta: float, rh: float) -> float:
-    """기상청 여름철 체감온도(℃).
-
-    ⚠️ 미국 NWS Heat Index(Rothfusz)와 혼동 주의.
-       법령상 31/33/35/38℃ 기준은 모두 이 공식 기준이며,
-       Heat Index를 쓰면 같은 조건에서 등급이 1~2단계 어긋난다.
+    실제 현장에서는 출역시스템 CSV/DB와 연동한다.
+    학생 신분으로 실제 명부(민감정보)를 취득할 수 없으므로 더미로 대체한다.
     """
-    tw = wet_bulb(ta, rh)
-    return round(-0.2442 + 0.55399 * tw + 0.45535 * ta
-                 - 0.0022 * tw ** 2 + 0.00278 * tw * ta + 3.0, 1)
+    rng = np.random.default_rng(seed)
+    trades = HEAVY_TRADES + ["토공", "설비", "전기", "신호수", "조경"]
+    return pd.DataFrame({
+        "성명": [f"근로자{i:03d}" for i in range(1, n + 1)],
+        "공종": rng.choice(trades, n),
+        "연령": rng.integers(24, 72, n),
+        "투입일차": rng.choice([1, 2, 3, 4, 5, 9, 20, 60], n,
+                            p=[.07, .06, .05, .05, .04, .13, .25, .35]),
+        "복귀자": rng.choice([True, False], n, p=[.12, .88]),
+        "만성질환": rng.choice([True, False], n, p=[.16, .84]),
+        "온열질환기왕력": rng.choice([True, False], n, p=[.05, .95]),
+        "약물복용": rng.choice([True, False], n, p=[.09, .91]),
+        "알코올의존": rng.choice([True, False], n, p=[.03, .97]),
+        "일시적건강저하": rng.choice([True, False], n, p=[.08, .92]),
+        "옥외작업": rng.choice([True, False], n, p=[.85, .15]),
+    })
 
 
-# =====================================================================
-# SECTION 2. 위치 → 격자
-# =====================================================================
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def geocode(query: str, kakao_key: str) -> tuple[float, float, str] | None:
-    """카카오 로컬 API: 장소명 → (위도, 경도, 정식명칭)."""
-    try:
-        r = requests.get(
-            "https://dapi.kakao.com/v2/local/search/keyword.json",
-            params={"query": query, "size": 1},
-            headers={"Authorization": f"KakaoAK {kakao_key}"}, timeout=10)
-        r.raise_for_status()
-        docs = r.json().get("documents", [])
-        if not docs:
-            return None
-        d = docs[0]
-        return float(d["y"]), float(d["x"]), d.get("place_name", query)
-    except Exception:
-        return None
-
-
-_RE, _GRID = 6371.00877, 5.0
-_SLAT1, _SLAT2, _OLON, _OLAT, _XO, _YO = 30.0, 60.0, 126.0, 38.0, 43, 136
-
-
-def latlon_to_grid(lat: float, lon: float) -> tuple[int, int]:
-    """기상청 Lambert Conformal Conic 5km 격자 변환.
-
-    ⚠️ theta *= sn 누락 시 최대 100km 이상 어긋난 격자를 조회하게 된다.
-    """
-    DEGRAD = math.pi / 180.0
-    re = _RE / _GRID
-    slat1, slat2 = _SLAT1 * DEGRAD, _SLAT2 * DEGRAD
-    olon, olat = _OLON * DEGRAD, _OLAT * DEGRAD
-
-    sn = math.tan(math.pi * 0.25 + slat2 * 0.5) / math.tan(math.pi * 0.25 + slat1 * 0.5)
-    sn = math.log(math.cos(slat1) / math.cos(slat2)) / math.log(sn)
-    sf = math.tan(math.pi * 0.25 + slat1 * 0.5)
-    sf = (sf ** sn) * math.cos(slat1) / sn
-    ro = math.tan(math.pi * 0.25 + olat * 0.5)
-    ro = re * sf / (ro ** sn)
-
-    ra = math.tan(math.pi * 0.25 + lat * DEGRAD * 0.5)
-    ra = re * sf / (ra ** sn)
-    theta = lon * DEGRAD - olon
-    if theta > math.pi:
-        theta -= 2.0 * math.pi
-    if theta < -math.pi:
-        theta += 2.0 * math.pi
-    theta *= sn                                   # ← 필수
-
-    return (int(ra * math.sin(theta) + _XO + 0.5),
-            int(ro - ra * math.cos(theta) + _YO + 0.5))
-
-
-# =====================================================================
-# SECTION 3. 기상청 API
-# =====================================================================
-
-FCST_BASE_HOURS = [2, 5, 8, 11, 14, 17, 20, 23]
-
-
-def now_kst() -> datetime:
-    return datetime.now(KST).replace(tzinfo=None)
-
-
-def latest_fcst_base(now: datetime) -> tuple[str, str]:
-    """단기예보: 가장 최근 제공 완료된 발표시각 (발표 +10분 후 조회 가능)."""
-    avail = [h for h in FCST_BASE_HOURS if now >= datetime.combine(now.date(), time(h, 10))]
-    if avail:
-        return now.strftime("%Y%m%d"), f"{max(avail):02d}00"
-    return (now.date() - timedelta(days=1)).strftime("%Y%m%d"), "2300"
-
-
-def latest_ncst_base(now: datetime) -> tuple[str, str]:
-    """초단기실황: 매시 정시 관측, 40분 이후 제공."""
-    t = now - timedelta(hours=1) if now.minute < 40 else now
-    return t.strftime("%Y%m%d"), t.strftime("%H00")
-
-
-def latest_ultra_base(now: datetime) -> tuple[str, str]:
-    """초단기예보: 매시 30분 발표(45분 제공), 발표시각+1h부터 6시간 제공.
-
-    현재 시각을 커버하려면 '1시간 전 30분' 발표본을 써야 한다.
-    예) 11:50 조회 → 10:30 발표본(10:45 제공) → 11:00~16:00 예보 포함
-    """
-    t = now - timedelta(hours=1)
-    return t.strftime("%Y%m%d"), t.strftime("%H30")
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_ultra_fcst(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame:
-    """초단기예보 → [datetime, ta, rh]. 실황이 아직 안 나온 현재 시각을 메운다."""
-    r = requests.get(f"{BASE_URL}/getUltraSrtFcst", timeout=15, params={
-        KEY_PARAM: key, "pageNo": 1, "numOfRows": 300, "dataType": "JSON",
-        "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
-    r.raise_for_status()
-    items = r.json()["response"]["body"]["items"]["item"]
-
-    raw = pd.DataFrame(items)
-    want = {"T1H": "ta", "REH": "rh"}
-    raw = raw[raw["category"].isin(want)]
-    wide = raw.pivot_table(index=["fcstDate", "fcstTime"], columns="category",
-                           values="fcstValue", aggfunc="first").reset_index()
-    wide.columns.name = None
-    wide = wide.rename(columns=want)
-    wide["datetime"] = pd.to_datetime(wide["fcstDate"] + wide["fcstTime"],
-                                      format="%Y%m%d%H%M")
-    for c in ["ta", "rh"]:
-        wide[c] = pd.to_numeric(wide[c], errors="coerce")
-    return wide[["datetime", "ta", "rh"]].dropna().sort_values("datetime")
-
-
-@st.cache_data(ttl=600, show_spinner="기상청 실황 수신 중…")
-def fetch_now(nx: int, ny: int, key: str, bd: str, bt: str) -> dict:
-    """초단기실황 → {T1H: 기온, REH: 습도, ...}"""
-    r = requests.get(f"{BASE_URL}/getUltraSrtNcst", timeout=15, params={
-        KEY_PARAM: key, "pageNo": 1, "numOfRows": 100, "dataType": "JSON",
-        "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
-    r.raise_for_status()
-    items = r.json()["response"]["body"]["items"]["item"]
-    return {i["category"]: float(i["obsrValue"]) for i in items}
-
-
-@st.cache_data(ttl=1800, show_spinner="기상청 단기예보 수신 중…")
-def fetch_forecast(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame:
-    """단기예보 → [datetime, ta, rh].
-
-    ⚠️ numOfRows는 1000 이상. 300이면 뒤쪽 시간대가 잘려 0℃로 표시된다.
-    """
-    r = requests.get(f"{BASE_URL}/getVilageFcst", timeout=20, params={
-        KEY_PARAM: key, "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
-        "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
-    r.raise_for_status()
-    items = r.json()["response"]["body"]["items"]["item"]
-
-    raw = pd.DataFrame(items)
-    want = {"TMP": "ta", "REH": "rh"}
-    raw = raw[raw["category"].isin(want)]
-    wide = raw.pivot_table(index=["fcstDate", "fcstTime"], columns="category",
-                           values="fcstValue", aggfunc="first").reset_index()
-    wide.columns.name = None
-    wide = wide.rename(columns=want)
-    wide["datetime"] = pd.to_datetime(wide["fcstDate"] + wide["fcstTime"],
-                                      format="%Y%m%d%H%M")
-    for c in ["ta", "rh"]:
-        wide[c] = pd.to_numeric(wide[c], errors="coerce")
-    return wide[["datetime", "ta", "rh"]].dropna().sort_values("datetime")
-
-
-def demo_forecast(start: date, days: int = 2, peak: float = 36.0) -> pd.DataFrame:
-    """API 없이 시연하기 위한 더미. 심사 중 API 장애 대비 fallback."""
-    rows = []
-    for d in range(days):
-        day = start + timedelta(days=d)
-        p = peak - d * 1.5
-        for h in range(24):
-            ta = max(p - 9.5 * (1 - math.sin(math.pi * max(h - 5, 0) / 20)) ** 1.3, p - 11)
-            rows.append({"datetime": datetime.combine(day, time(h)),
-                         "ta": round(ta, 1),
-                         "rh": round(float(np.clip(88 - (ta - 23) * 3.2, 35, 95)))})
-    return pd.DataFrame(rows)
-
-
-def enrich(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_roster(df: pd.DataFrame) -> pd.DataFrame:
+    """업로드된 CSV를 표준 컬럼으로 보정. 없는 컬럼은 기본값으로 채운다."""
     out = df.copy()
-    out["at"] = [apparent_temp(r.ta, r.rh) for r in out.itertuples()]
-    out["hour"] = out["datetime"].dt.hour
-    out["day"] = out["datetime"].dt.date
-    return out
+    defaults = {
+        "성명": "", "공종": "미상", "연령": 0, "투입일차": 999, "복귀자": False,
+        "만성질환": False, "온열질환기왕력": False, "약물복용": False,
+        "알코올의존": False, "일시적건강저하": False, "옥외작업": True,
+    }
+    for c, d in defaults.items():
+        if c not in out.columns:
+            out[c] = d
+    for c in ["복귀자", "만성질환", "온열질환기왕력", "약물복용",
+              "알코올의존", "일시적건강저하", "옥외작업"]:
+        out[c] = out[c].astype(str).str.strip().str.lower().isin(
+            ["true", "1", "y", "yes", "예", "o", "ㅇ"]) | (out[c] == True)  # noqa: E712
+    for c in ["연령", "투입일차"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0).astype(int)
+    return out[ROSTER_COLUMNS]
 
 
 # =====================================================================
-# SECTION 4. 알고리즘 1 — 블록화 + 보수적 MAX
+# SECTION E. 민감군 판정
 # =====================================================================
 
-def build_blocks(day_df: pd.DataFrame, target: date, conservative: bool = True) -> pd.DataFrame:
-    """1시간 예보 → 공정 블록 재집계.
+def classify_worker(row: pd.Series) -> list[str]:
+    """지침 8유형 중 해당하는 코드 목록을 반환."""
+    hit = []
+    if row["만성질환"]:
+        hit.append("chronic")
+    if row["온열질환기왕력"]:
+        hit.append("history")
+    if row["연령"] >= ELDERLY_AGE:
+        hit.append("elderly")
+    if row["약물복용"]:
+        hit.append("medication")
+    if row["알코올의존"]:
+        hit.append("alcohol")
+    if any(t in str(row["공종"]) for t in HEAVY_TRADES):
+        hit.append("heavy")
+    if acclim_ratio(row["투입일차"], row["복귀자"]) is not None:
+        hit.append("newcomer")
+    if row["일시적건강저하"]:
+        hit.append("acute")
+    return hit
 
-    [보수적 MAX]
-      안전보건규칙은 여러 작업장소 중 '가장 높은 온도'를 기준으로 적용하도록 한다(공간축 MAX).
-      본 시스템은 인체 열 축적을 근거로 같은 원칙을 시간축으로 확장한다.
+
+def build_tbm(roster: pd.DataFrame, tier_code: str) -> pd.DataFrame:
+    """TBM 타겟 명단 생성.
+
+    tier_code: 당일 통제 등급 (CRITICAL=38℃ 이상, SEVERE=35℃ …)
     """
+    df = roster[roster["옥외작업"]].copy()
+    if df.empty:
+        return pd.DataFrame()
+
     rows = []
-    for b in WORK_BLOCKS:
-        c = day_df[(day_df["hour"] >= b.start_h) & (day_df["hour"] < b.end_h)]
-        if c.empty:
+    for _, r in df.iterrows():
+        hits = classify_worker(r)
+        if not hits:
             continue
-        rep = c["at"].max() if conservative else c["at"].mean()
-        t = classify(rep)
+
+        ratio = acclim_ratio(r["투입일차"], r["복귀자"])
+        track = "복귀" if r["복귀자"] else "신규"
+
+        # ---- 관리등급 ----
+        # 38℃ 이상은 지침상 '민감군 옥외작업 제한'이 명시되어 있다.
+        if tier_code == "CRITICAL":
+            grade = "옥외작업 제한"
+        elif ratio is not None and ratio <= 40:
+            grade = "집중관찰"          # 열순응 초기 (사망자 70.9%가 1~2일차)
+        elif ratio is not None:
+            grade = "열순응 관리"
+        else:
+            grade = "집중관찰"
+
+        # ---- 조치사항 (질환명 없이) ----
+        act = []
+        if tier_code == "CRITICAL":
+            act.append("옥외작업 제한 [38℃ 이상]")
+        if ratio is not None:
+            act.append(f"{track} 열순응 {ratio}% ({r['투입일차']}일차)")
+        act.append("휴식시간 추가 배정 · 작업시간 단축")
+
         rows.append({
-            "block_name": b.name, "is_work": b.is_work,
-            "start": datetime.combine(target, time(b.start_h)),
-            "end": datetime.combine(target, time(b.end_h)),
-            "at_max": round(c["at"].max(), 1), "at_mean": round(c["at"].mean(), 1),
-            "at_rep": round(rep, 1),
-            "peak_hour": int(c.loc[c["at"].idxmax(), "hour"]),
-            "ta_max": round(c["ta"].max(), 1), "rh_mean": round(c["rh"].mean()),
-            "tier_code": t.code, "tier_label": t.label, "color": t.color,
-            "legal": t.legal, "stop_work": t.stop_work,
+            "성명": r["성명"],
+            "공종": r["공종"],
+            "관리등급": grade,
+            "해당유형": len(hits),
+            "조치사항": " / ".join(act),
+            "_codes": ",".join(hits),
+            "_ratio": ratio if ratio is not None else "",
+            "_track": track if ratio is not None else "",
         })
-    return pd.DataFrame(rows)
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    order = {"옥외작업 제한": 0, "집중관찰": 1, "열순응 관리": 2}
+    out["_o"] = out["관리등급"].map(order)
+    return out.sort_values(["_o", "해당유형"], ascending=[True, False]).drop(columns="_o")
 
 
-def rest_slots(row: pd.Series) -> list[dict]:
-    """블록 내 휴식 타이밍. 휴식이 블록 안에 온전히 들어가는 것만 채택."""
-    t = tier_by_code(row["tier_code"])
-    if not t.cycle_hours or not row["is_work"]:
-        return []
-    out, cur = [], row["start"] + timedelta(hours=t.cycle_hours)
-    while cur + timedelta(minutes=t.rest_minutes) <= row["end"]:
-        out.append({"휴식 시작": cur.strftime("%H:%M"),
-                    "휴식 종료": (cur + timedelta(minutes=t.rest_minutes)).strftime("%H:%M"),
-                    "근거": f"{t.short} · {t.legal}"})
-        cur += timedelta(hours=t.cycle_hours)
-    return out
+def public_view(tbm: pd.DataFrame) -> pd.DataFrame:
+    """TBM 조회용 — 질환명·상세 사유 없음. 아침 조회에서 화면에 띄우는 표."""
+    return tbm[["성명", "공종", "관리등급", "조치사항"]]
 
 
-def loss_ratio(blocks: pd.DataFrame) -> float:
-    total = lost = 0.0
-    for _, r in blocks[blocks["is_work"]].iterrows():
-        h = (r["end"] - r["start"]).seconds / 3600
-        t = tier_by_code(r["tier_code"])
-        total += h
-        lost += h * (1.0 if t.stop_work else t.rest_ratio)
-    return round(lost / total * 100, 1) if total else 0.0
+def health_view(tbm: pd.DataFrame) -> pd.DataFrame:
+    """보건관리자용 — 해당 유형 상세 포함. 열람 권한 분리 필요."""
+    out = tbm.copy()
+    out["해당유형상세"] = out["_codes"].apply(
+        lambda s: " / ".join(f"{type_by_code(c).no}{type_by_code(c).label}"
+                             for c in s.split(",") if c))
+    return out[["성명", "공종", "관리등급", "해당유형상세", "조치사항"]]
 
 
 # =====================================================================
-# SECTION 5. 알고리즘 2 — T-20 / T-30 사전 알람
+# SECTION F. UI
 # =====================================================================
 
-ALARM_TMPL = ("[Safecast] {lead}분 후 '{block}' 구간 진입\n"
-              "· 예상 체감온도 {at}℃ / {tier} ({legal})\n"
-              "· 조치: {action}\n"
-              "· 안전관리자: 휴게시설 냉방·음용수 상태 사전 점검 요망")
+BADGE = {
+    "의무": ("#B91C1C", "🔴"),
+    "권고": ("#C2410C", "🟠"),
+    "설정": ("#1D4ED8", "🔵"),
+    "미수집": ("#6B7280", "⚪"),
+}
 
 
-def build_alarms(blocks: pd.DataFrame, lead: int, trigger: str = "ALERT") -> pd.DataFrame:
-    """위험 블록 T-lead 사전 알람.
+def badge(level: str, text: str) -> str:
+    c, icon = BADGE[level]
+    return (f'<span style="background:{c}18;color:{c};border:1px solid {c}55;'
+            f'border-radius:5px;padding:1px 7px;font-size:11.5px;font-weight:600;'
+            f'margin-right:5px;">{icon} {level} · {text}</span>')
 
-    정각이 아닌 이유: ① 작업의 안전한 마무리 ② 근로자 이동시간
-                     ③ 안전관리자의 휴게시설 점검 리드타임
+
+def render_worker_check(day_tier_code: str = "NORMAL") -> None:
+    """근로자 모드 — 본인 상태 확인 + 자각증상 자가진단.
+
+    [입력 주체를 나눈 이유]
+      · 연령·공종·투입일차 → 출역시스템에 이미 있는 정보. 관리자 CSV로 받는다.
+      · 질환·약물·음주 등  → 민감정보. 본인이 입력하는 것이 곧 동의이며,
+                              저장하지 않으므로 보관 부담도 생기지 않는다.
+      · 자각증상            → 지침이 '근로자 스스로 체크'하도록 규정.
+
+    [저장하지 않는 이유]
+      Streamlit은 세션이 사용자별로 분리되어 관리자 화면으로 전달되지 않는다.
+      외부 DB 연동은 확장 과제로 두고, 본 화면은 '본인 인지'와
+      '관리자에게 알릴 근거'를 만드는 데 집중한다.
     """
-    order = [t.code for t in HEAT_TIERS]
-    limit = order.index(trigger)
-    rows = []
-    for _, r in blocks.iterrows():
-        if not r["is_work"] or order.index(r["tier_code"]) > limit:
-            continue
-        t = tier_by_code(r["tier_code"])
-        rows.append({
-            "발송시각": (r["start"] - timedelta(minutes=lead)).strftime("%H:%M"),
-            "대상 블록": r["block_name"], "블록 시작": r["start"].strftime("%H:%M"),
-            "등급": r["tier_label"], "체감온도": r["at_rep"],
-            "메시지": ALARM_TMPL.format(lead=lead, block=r["block_name"],
-                                      at=r["at_rep"], tier=t.label,
-                                      legal=t.legal, action=t.actions[0]),
-        })
-    return pd.DataFrame(rows)
+    st.subheader("🩺 오늘의 내 상태 확인")
+    st.caption("입력 내용은 저장되지 않습니다 · 결과는 본인에게만 표시됩니다")
 
+    hits: list[str] = []
 
-# =====================================================================
-# SECTION 6. UI
-# =====================================================================
+    # ---- 1단계: 열순응 (⑦ 신규배치자) ----
+    st.markdown("##### 1. 폭염작업 투입 일차")
+    c1, c2 = st.columns([1, 1])
+    track = c1.radio("구분", ["해당 없음", "신규 투입", "복귀(7일 이상 쉼)"],
+                     help="처음 폭염작업을 하거나, 연속 7일 이상 작업하지 않다가 복귀한 경우")
+    ratio = None
+    if track != "해당 없음":
+        day = c2.number_input("투입 며칠째인가요?", 1, 30, 1)
+        ratio = acclim_ratio(day, track.startswith("복귀"))
+        if ratio is not None:
+            hits.append("newcomer")
 
-def block_card(r: pd.Series) -> str:
-    stop = "🚫 옥외작업 중지 권고" if r["stop_work"] else "&nbsp;"
-    dim = "opacity:0.55;" if not r["is_work"] else ""
-    return f"""
-<div style="border-left:8px solid {r['color']};background:#FAFAFA;{dim}
-            padding:12px 16px;border-radius:8px;margin-bottom:9px;">
-  <div style="font-size:12px;color:#666;">{r['start']:%H:%M} ~ {r['end']:%H:%M}</div>
-  <div style="font-size:17px;font-weight:700;">{r['block_name']}</div>
-  <div style="font-size:29px;font-weight:800;color:{r['color']};line-height:1.15;">
-      {r['at_rep']}℃</div>
-  <div style="font-size:13px;color:{r['color']};font-weight:600;">
-      {r['tier_label']} · {r['legal']}</div>
-  <div style="font-size:11.5px;color:#888;margin-top:5px;">
-      기온 {r['ta_max']}℃ / 습도 {r['rh_mean']}% ·
-      블록 내 최고 {r['at_max']}℃({r['peak_hour']}시) vs 평균 {r['at_mean']}℃</div>
-  <div style="font-size:12.5px;color:#B91C1C;font-weight:600;">{stop}</div>
-</div>"""
+    # ---- 2단계: 건강 상태 (①②④⑤⑧) ----
+    st.markdown("##### 2. 해당하는 항목을 체크하세요")
+    st.caption("⚠️ 아래 정보는 저장되지 않으며, 본인 판단을 돕기 위한 것입니다")
+    h1, h2 = st.columns(2)
+    if h1.checkbox("만성질환이 있음 (고혈압·저혈압·당뇨·심혈관·신장 등)"):
+        hits.append("chronic")
+    if h1.checkbox("과거 온열질환을 겪은 적 있음"):
+        hits.append("history")
+    if h1.checkbox("만 65세 이상"):
+        hits.append("elderly")
+    if h2.checkbox("체온 조절·수분에 영향 주는 약을 복용 중"):
+        hits.append("medication")
+    if h2.checkbox("전날 과음했거나 잠을 못 잤음 / 탈수 느낌"):
+        hits.append("acute")
+    if h2.checkbox("오늘 고강도 작업 (형틀·철근·타설·용접 등)"):
+        hits.append("heavy")
 
+    st.divider()
 
-def timeline(df: pd.DataFrame, title: str) -> go.Figure:
-    fig = go.Figure()
-    for d in sorted(df["day"].unique()):
-        for b in WORK_BLOCKS:
-            if not b.is_work:
-                continue
-            s = df[(df["day"] == d) & (df["hour"] >= b.start_h) & (df["hour"] < b.end_h)]
-            if s.empty:
-                continue
-            fig.add_vrect(x0=datetime.combine(d, time(b.start_h)),
-                          x1=datetime.combine(d, time(b.end_h)),
-                          fillcolor=classify(s["at"].max()).color,
-                          opacity=0.13, line_width=0, layer="below")
-    for t in HEAT_TIERS:
-        if t.min_temp < 0:
-            continue
-        fig.add_hline(y=t.min_temp, line_dash="dot", line_color=t.color, line_width=1.2,
-                      annotation_text=f"{t.min_temp:.0f}℃ {t.short}",
-                      annotation_position="right",
-                      annotation_font=dict(size=10, color=t.color))
-    fig.add_trace(go.Scatter(x=df["datetime"], y=df["ta"], name="기온",
-                             line=dict(color="#94A3B8", width=1.6, dash="dash")))
-    fig.add_trace(go.Scatter(x=df["datetime"], y=df["at"], name="체감온도",
-                             line=dict(color="#1E293B", width=3),
-                             mode="lines+markers", marker=dict(size=4)))
-    fig.update_layout(title=title, height=380, hovermode="x unified",
-                      margin=dict(l=10, r=75, t=45, b=10), yaxis_title="℃",
-                      legend=dict(orientation="h", y=1.12, x=0))
-    return fig
+    # ---- 3단계: 자각증상 ----
+    st.markdown("##### 3. 지금 느껴지는 증상")
+    st.caption("행정안전부 온열질환 자각증상 점검표")
+    checked = []
+    s1, s2 = st.columns(2)
+    for i, s in enumerate(SYMPTOMS):
+        col = s1 if i < 4 else s2
+        if col.checkbox(s, key=f"sym_{i}"):
+            checked.append(s)
 
+    st.divider()
 
-def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int) -> None:
-    blocks = build_blocks(day_df, target, conservative)
-    if blocks.empty:
-        st.warning("해당 일자의 예보 데이터가 없습니다.")
-        return
-
-    work = blocks[blocks["is_work"]]
-    dmax = day_df["at"].max()
-    dt_ = classify(dmax)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("최고 체감온도", f"{dmax:.1f}℃",
-              delta=f"기온 대비 +{dmax - day_df['ta'].max():.1f}℃")
-    c2.metric("통제 등급", dt_.short, delta=dt_.legal, delta_color="off")
-    c3.metric("작업중지 블록", f"{int(work['stop_work'].sum())} / {len(work)}")
-    c4.metric("작업시간 손실률", f"{loss_ratio(blocks)}%")
-
-    if dt_.stop_work:
-        st.error("⚠️ " + " · ".join(dt_.actions), icon="🚨")
-    elif dt_.code != "NORMAL":
-        st.warning("📋 " + " · ".join(dt_.actions), icon="⚠️")
-
-    L, R = st.columns([1, 1.35])
-    with L:
-        st.markdown("##### 공정 블록별 통제 등급")
-        for _, r in blocks.iterrows():
-            st.markdown(block_card(r), unsafe_allow_html=True)
-    with R:
-        st.plotly_chart(timeline(day_df, f"{target:%m월 %d일} 체감온도"),
-                        use_container_width=True)
-
-        st.markdown("##### 블록별 휴식 계획")
-        found = False
-        for _, r in blocks.iterrows():
-            s = rest_slots(r)
-            if s:
-                found = True
-                st.caption(f"**{r['block_name']}** — {r['tier_label']}")
-                st.dataframe(pd.DataFrame(s), hide_index=True, use_container_width=True)
-        if not found:
-            st.info("정기 휴식 부여 기준(체감온도 33℃) 미도달")
-
-        alarms = build_alarms(blocks, lead)
-        if not alarms.empty:
-            st.markdown(f"##### T-{lead} 사전 알람")
-            st.dataframe(alarms[["발송시각", "대상 블록", "블록 시작", "등급", "체감온도"]],
-                         hide_index=True, use_container_width=True)
-            for _, a in alarms.iterrows():
-                with st.expander(f"{a['발송시각']} → {a['대상 블록']} 메시지"):
-                    st.code(a["메시지"], language=None)
-
-
-def main() -> None:
-    st.set_page_config(page_title="Safecast", page_icon="🏗️", layout="wide")
-
-    # secrets.toml 파일 자체가 없으면 st.secrets 접근이 예외를 던진다 (로컬 첫 실행)
-    try:
-        kakao = st.secrets.get("KAKAO_KEY", "")
-        kma = st.secrets.get("KMA_KEY", "")
-    except Exception:
-        kakao = kma = ""
-
-    with st.sidebar:
-        st.header("⚙️ 관제 설정")
-
-        # ---- 모드 ----
-        # Streamlit은 사용자별 인증이 없어 URL을 아는 사람은 모두 접근할 수 있다.
-        # 민감군 명단이 노출되지 않도록 관리자 모드에 비밀번호를 건다.
-        mode = st.radio("모드", ["👷 근로자", "🛡️ 관리자"], horizontal=True)
-        is_admin = False
-        if mode.startswith("🛡️"):
-            try:
-                admin_pw = st.secrets.get("ADMIN_PW", "")
-            except Exception:
-                admin_pw = ""
-            if not admin_pw:
-                st.warning("secrets에 ADMIN_PW 미설정 — 임시 통과")
-                is_admin = True
-            else:
-                pw = st.text_input("관리자 비밀번호", type="password")
-                is_admin = (pw == admin_pw)
-                if pw and not is_admin:
-                    st.error("비밀번호가 일치하지 않습니다.")
-        st.divider()
-
-        place = st.text_input("현장 위치", placeholder="예: 국민대학교")
-
-        st.divider()
-        demo = st.toggle("데모 모드 (API 미사용)", value=not kma,
-                         help="API 키 없이 시연. 심사 중 API 장애 대비 fallback.")
-        peak = st.slider("[데모] 오늘 최고기온", 26.0, 42.0, 36.0, 0.5) if demo else 36.0
-
-        st.divider()
-        lead = LEAD_OPTIONS[st.radio("사전 알람 시점", list(LEAD_OPTIONS.keys()),
-                                     help="현장이 넓거나 고층일수록 이동·마무리 시간이 길어집니다.")]
-        conservative = st.toggle("보수적 MAX 적용", value=True,
-                                 help="끄면 블록 평균 기준. A/B 비교 시연용.")
-
-        if not demo and not kma:
-            st.error("secrets.toml에 KMA_KEY를 등록하세요.")
-
-    st.title("🏗️ Safecast")
-    st.caption("건설현장 폭염 관제 시스템 · 산업안전보건기준에 관한 규칙(2025.7 개정) 기준")
-
-    # ---------- 위치 ----------
-    if demo:
-        lat, lon, name = 37.4979, 127.0276, place or "데모 현장"
-    elif not kakao:
-        # 카카오 키가 없으면 데모 좌표로 대체 (기상청 키만으로도 동작)
-        lat, lon, name = 37.5665, 126.9780, place or "서울시청(기본)"
-    else:
-        if not place:
-            st.info("사이드바에 현장 위치를 입력하세요.")
-            st.stop()
-        g = geocode(place, kakao)
-        if not g:
-            st.error(f"'{place}' 위치를 찾을 수 없습니다.")
-            st.stop()
-        lat, lon, name = g
-    nx, ny = latlon_to_grid(lat, lon)
-
-    now = now_kst()
-    today, tomorrow = now.date(), now.date() + timedelta(days=1)
-
-    # ---------- 데이터 ----------
-    if demo:
-        fc = enrich(demo_forecast(today, 2, peak))
-        ncst, ncst_dt, ufc, src = None, None, None, "🟡 데모 데이터"
-    else:
-        try:
-            bd, bt = latest_fcst_base(now)
-            fc = enrich(fetch_forecast(nx, ny, kma, bd, bt))
-            src = f"🟢 단기예보 {bt[:2]}시 발표"
-        except Exception as e:
-            st.error(f"예보 API 실패 → 데모 데이터 대체\n\n`{e}`")
-            fc, src = enrich(demo_forecast(today, 2, 36.0)), "🔴 API 실패"
-        try:
-            nb, nt = latest_ncst_base(now)
-            ncst = fetch_now(nx, ny, kma, nb, nt)
-            ncst_dt = datetime.strptime(nb + nt, "%Y%m%d%H%M")
-        except Exception:
-            ncst, ncst_dt = None, None
-        try:
-            ub, ut = latest_ultra_base(now)
-            ufc = fetch_ultra_fcst(nx, ny, kma, ub, ut)
-        except Exception:
-            ufc = None
-
-    fc = fc[fc["day"].isin([today, tomorrow])]
-    st.success(f"📍 **{name}** · 격자 (nx={nx}, ny={ny}) · {src}")
-
-    # ---------- 현재 상황 (관측 + 현재시각 추정) ----------
-    if ncst and "T1H" in ncst and "REH" in ncst:
-        obs_ta, obs_rh = ncst["T1H"], ncst["REH"]
-        obs_at = apparent_temp(obs_ta, obs_rh)
-
-        # 실황은 정시 관측 + 40분 지연 → 그 사이는 초단기예보로 메운다
-        cur_ta, cur_rh, cur_src, cur_dt = obs_ta, obs_rh, "관측", ncst_dt
-        if ufc is not None and not ufc.empty and ncst_dt is not None:
-            newer = ufc[(ufc["datetime"] > ncst_dt) &
-                        (ufc["datetime"] <= now.replace(minute=0, second=0, microsecond=0))]
-            if not newer.empty:
-                last = newer.iloc[-1]
-                cur_ta, cur_rh = float(last["ta"]), float(last["rh"])
-                cur_src, cur_dt = "초단기예보", last["datetime"].to_pydatetime()
-
-        cur_at = apparent_temp(cur_ta, cur_rh)
-        ct = classify(cur_at)
-
-        m = st.columns(4)
-        m[0].metric("현재 기온", f"{cur_ta}℃")
-        m[1].metric("현재 습도", f"{cur_rh}%")
-        m[2].metric("현재 체감온도", f"{cur_at}℃", delta=f"+{cur_at - cur_ta:.1f}℃")
-        m[3].metric("현재 등급", ct.short, delta=ct.legal, delta_color="off")
-
-        stamp = f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src
-        note = f"📡 {stamp} 기준"
-        if cur_src == "초단기예보" and ncst_dt:
-            note += f" · 최종 관측 {ncst_dt:%H:%M} {obs_ta}℃ (체감 {obs_at}℃)"
-        st.caption(
-            note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
-            "철골·콘크리트면은 이보다 높을 수 있습니다."
-        )
-
-    today_df, tmr_df = fc[fc["day"] == today], fc[fc["day"] == tomorrow]
-    day_max = float(today_df["at"].max()) if not today_df.empty else float(fc["at"].max())
-    day_tier = classify(day_max)
-
-    # ---------- 근로자 모드 ----------
-    # 지침은 자각증상 점검표를 '근로자 스스로' 체크하도록 정한다.
-    # 근로자에게는 남의 건강정보를 일절 보여주지 않는다.
-    if not is_admin:
+    # ---- 결과 ----
+    n = len(checked)
+    if n >= SYMPTOM_THRESHOLD:
+        st.error(f"⚠️ 증상 {n}개 — 지금 즉시 아래 조치를 하고 관리자·동료에게 알리세요",
+                 icon="🚨")
+        for i, a in enumerate(SYMPTOM_ACTIONS, 1):
+            st.markdown(f"**{i}.** {a}")
         st.markdown(
-            f"""<div style="background:{day_tier.color};color:#fff;padding:18px;
-                    border-radius:10px;text-align:center;margin-bottom:14px;">
-              <div style="font-size:13px;opacity:.9;">오늘 우리 현장</div>
-              <div style="font-size:38px;font-weight:800;line-height:1.2;">
-                  {day_max:.1f}℃</div>
-              <div style="font-size:17px;font-weight:700;">{day_tier.label}</div>
+            '<div style="background:#7F1D1D;color:#fff;padding:14px;'
+            'border-radius:8px;text-align:center;font-size:19px;font-weight:800;">'
+            '증상이 개선되지 않으면 즉시 119</div>', unsafe_allow_html=True)
+        st.caption("판단이 어려운 경우에도 즉시 119에 신고 후 응급조치하세요.")
+        st.divider()
+    elif n == 1:
+        st.warning(f"증상 {n}개 — 시원한 곳에서 휴식하고 수분을 보충하세요. "
+                   "증상이 늘어나면 즉시 알리세요.")
+
+    if hits:
+        labels = [f"{type_by_code(c).no} {type_by_code(c).label}" for c in hits]
+        st.markdown(
+            f"""<div style="background:#FEF3C7;border-left:6px solid #F59E0B;
+                    padding:14px 16px;border-radius:8px;">
+              <div style="font-size:17px;font-weight:700;color:#92400E;">
+                  나는 오늘 온열질환 민감군입니다</div>
+              <div style="font-size:13px;color:#78350F;margin-top:6px;">
+                  해당: {' · '.join(labels)}</div>
             </div>""", unsafe_allow_html=True)
 
-        if day_tier.cycle_hours:
-            st.info(f"💧 오늘은 **{day_tier.cycle_hours:.0f}시간마다 "
-                    f"{day_tier.rest_minutes}분 이상** 휴식이 부여됩니다.")
-        if day_tier.stop_work:
-            st.error("🚫 " + day_tier.actions[1] if len(day_tier.actions) > 1
-                     else "🚫 " + day_tier.actions[0], icon="🚨")
+        st.markdown("**오늘 나에게 적용되는 조치**")
+        acts = []
+        if ratio is not None:
+            acts.append(f"🔸 **열순응 {ratio}%** — 오늘은 정상 작업량의 {ratio}%까지만 "
+                        f"작업하세요 ({track})")
+        if day_tier_code == "CRITICAL":
+            acts.append("🔸 **옥외작업 제한** — 체감온도 38℃ 이상입니다. "
+                        "관리자에게 배치 조정을 요청하세요")
+        acts.append("🔸 휴식시간을 추가로 배정받을 수 있습니다")
+        acts.append("🔸 작업시간 단축을 요청할 수 있습니다")
+        for a in acts:
+            st.markdown(a)
 
-        st.divider()
-        T.render_worker_check(day_tier.code)
+        st.info("📢 **이 화면을 관리자에게 보여주세요.** 민감군은 아침 조회(TBM)에서 "
+                "별도 관리 대상입니다.")
+    elif n < SYMPTOM_THRESHOLD:
+        st.success("현재 해당하는 민감군 항목과 증상이 없습니다. "
+                   "그래도 갈증을 느끼기 전에 물을 자주 드세요.")
 
-        st.divider()
-        st.caption("🛑 몸이 이상하면 즉시 작업을 멈추고 알리세요. "
-                   "근로자는 작업중지를 요청할 권리가 있습니다.")
-        st.caption("관리자는 사이드바에서 관리자 모드로 전환하세요.")
+    st.caption("근거: 고용노동부 「폭염 대비 사업장 대응지침」(2026.5) 18~19쪽")
+
+
+def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
+                     day_max: float) -> None:
+    """관리자 모드 — TBM 타겟 명단."""
+    tbm = build_tbm(roster, tier_code)
+
+    st.markdown(badge("권고", "대응지침 18~19쪽") +
+                badge("미수집", "혈압 등 수치"), unsafe_allow_html=True)
+    st.caption(f"당일 최고 체감온도 {day_max:.1f}℃ · {tier_label} 기준으로 산출")
+
+    if tbm.empty:
+        st.info("옥외작업 대상 중 민감군·열순응 해당자가 없습니다.")
         return
 
-    # ---------- 이하 관리자 모드 ----------
-    # ---------- D+1 사전 경보 ----------
-    if not tmr_df.empty and not today_df.empty:
-        tt, yt = classify(tmr_df["at"].max()), classify(today_df["at"].max())
-        if tt.min_temp > yt.min_temp:
-            st.error(
-                f"📢 **내일 통제 등급 상향 예상** — 오늘 {yt.short} → 내일 **{tt.short}** "
-                f"(최고 체감온도 {tmr_df['at'].max():.1f}℃)\n\n"
-                f"오늘 중 조치: 공정계획 조정 · 쉼터/음용수 물량 확보 · "
-                f"민감군 배치 재검토 · 조기출근 전환 검토", icon="🚨")
+    out_n = int((tbm["관리등급"] == "옥외작업 제한").sum())
+    m = st.columns(4)
+    m[0].metric("출역 인원", f"{len(roster)}명")
+    m[1].metric("옥외작업", f"{int(roster['옥외작업'].sum())}명")
+    m[2].metric("TBM 타겟", f"{len(tbm)}명")
+    m[3].metric("옥외작업 제한", f"{out_n}명",
+                delta="38℃ 이상" if out_n else None, delta_color="off")
 
-    t1, t2, t4, t3 = st.tabs([f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-                              "👷 TBM 타겟 명단", "📖 법적 근거"])
+    if out_n:
+        st.error(f"🚨 체감온도 38℃ 이상 — 민감군 {out_n}명 옥외작업 제한 대상입니다. "
+                 "긴급조치 작업 외 옥외작업 중지를 함께 검토하세요.", icon="🚨")
 
-    with t1:
-        if today_df.empty:
-            st.warning("오늘 잔여 예보가 없습니다.")
+    tab1, tab2, tab3 = st.tabs(["📋 TBM 조회용", "🩺 보건관리자용", "🌡️ 열순응 현황"])
+
+    with tab1:
+        st.caption("아침 조회에서 화면에 띄우는 표 — 질환명·상세 사유 미표시")
+        st.dataframe(public_view(tbm), hide_index=True, use_container_width=True,
+                     height=420)
+        st.download_button("📥 TBM 명단 CSV",
+                           public_view(tbm).to_csv(index=False).encode("utf-8-sig"),
+                           file_name="TBM_명단.csv", mime="text/csv")
+        st.caption("ℹ️ 산업안전보건법 제132조제2항 — 개별 근로자의 건강진단 결과는 "
+                   "본인 동의 없이 공개할 수 없습니다.")
+
+    with tab2:
+        st.caption("⚠️ 열람 권한 분리 대상 — 보건관리자·산업보건의만 접근")
+        st.dataframe(health_view(tbm), hide_index=True, use_container_width=True,
+                     height=420)
+        st.download_button("📥 보건관리자용 CSV",
+                           health_view(tbm).to_csv(index=False).encode("utf-8-sig"),
+                           file_name="보건관리자용_명단.csv", mime="text/csv")
+
+    with tab3:
+        ac = tbm[tbm["_ratio"] != ""].copy()
+        if ac.empty:
+            st.info("열순응 프로그램 진행 중인 근로자가 없습니다.")
         else:
-            render_day(today_df, today, conservative, lead)
+            ac["허용 작업량"] = ac["_ratio"].astype(int).astype(str) + "%"
+            ac["트랙"] = ac["_track"]
+            st.dataframe(ac[["성명", "공종", "트랙", "허용 작업량", "관리등급"]],
+                         hide_index=True, use_container_width=True)
 
-    with t2:
-        if tmr_df.empty:
-            st.warning("내일 예보 데이터가 없습니다.")
-        else:
-            render_day(tmr_df, tomorrow, conservative, lead)
+        st.markdown("##### 열순응 프로그램 (5일간 단계적 적용)")
+        st.dataframe(pd.DataFrame([
+            {"구분": "신규직원 (또는 민감군)", **{f"{d}일": f"{v}%"
+                                          for d, v in ACCLIM_NEW.items()}},
+            {"구분": "복귀직원 (연속 7일 이상 미작업)", **{f"{d}일": f"{v}%"
+                                                for d, v in ACCLIM_RETURN.items()}},
+        ]), hide_index=True, use_container_width=True)
+        st.caption(f"출처: {ACCLIM_SRC}")
+        st.info("온열질환 산재 사망자의 41.9%가 투입 첫날, 29.0%가 둘째날에 "
+                "발생했습니다. (7년간 31명 중 25명이 7일 이내)")
 
-    with t4:
-        st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 자동 선별합니다.")
-        up = st.file_uploader(
-            "출역 명부 CSV (미업로드 시 시연용 더미 사용)", type="csv",
-            help="컬럼: " + ", ".join(T.ROSTER_COLUMNS))
-        if up is not None:
-            try:
-                roster = T.normalize_roster(pd.read_csv(up))
-                st.success(f"출역 명부 {len(roster)}명 로드")
-            except Exception as e:
-                st.error(f"CSV 읽기 실패 → 더미로 대체\n\n`{e}`")
-                roster = T.make_demo_roster()
-        else:
-            roster = T.make_demo_roster()
-            st.caption("🟡 시연용 더미 명부 — 실제 현장에서는 출역시스템 CSV/DB 연동")
 
-        st.divider()
-        T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
+def render_basis() -> None:
+    """근거 탭 — 어떤 항목이 어떤 등급인지 한눈에."""
+    st.markdown("#### 판정 근거 등급")
+    st.dataframe(pd.DataFrame([
+        {"항목": "33℃ 2시간 이내 20분 휴식", "등급": "🔴 의무",
+         "근거": "안전보건규칙 제560조제3항"},
+        {"항목": "체감온도·조치사항 일자별 기록·보관", "등급": "🔴 의무",
+         "근거": "안전보건규칙 제562조제2항제3호"},
+        {"항목": "민감군 8유형", "등급": "🟠 권고", "근거": "대응지침 18쪽"},
+        {"항목": "열순응 20/40/60/80/100%", "등급": "🟠 권고", "근거": "대응지침 19쪽"},
+        {"항목": "복귀자 50/60/70/80/100%", "등급": "🟠 권고", "근거": "대응지침 19쪽"},
+        {"항목": "자각증상 2개 이상 조치", "등급": "🟠 권고",
+         "근거": "대응지침 18쪽(행정안전부 점검표)"},
+        {"항목": "38℃ 민감군 옥외작업 제한", "등급": "🟠 권고", "근거": "대응지침 14쪽"},
+        {"항목": "고령 65세", "등급": "🟠 권고",
+         "근거": "질병관리청 (65세 이상 중증화 위험 1.99배)"},
+        {"항목": "공정 블록 구간", "등급": "🔵 설정",
+         "근거": "14~17시만 법정 · 나머지는 현장 공정"},
+        {"항목": "사전 알람 리드타임", "등급": "🔵 설정", "근거": "현장 규모별"},
+        {"항목": "혈압 등 수치", "등급": "⚪ 미수집",
+         "근거": "법령상 판정 기준 없음 · 제138조상 의사 판단"},
+    ]), hide_index=True, use_container_width=True)
 
-    with t3:
-        st.dataframe(pd.DataFrame([{
-            "체감온도": f"{t.min_temp:.0f}℃ 이상", "등급": t.label,
-            "휴식": (f"{t.cycle_hours:.0f}시간마다 {t.rest_minutes}분"
-                     if t.cycle_hours else "정기휴식 규정 없음"),
-            "성격": t.legal, "주요 조치": t.actions[0],
-        } for t in HEAT_TIERS if t.min_temp > 0]), hide_index=True,
-            use_container_width=True)
+    st.markdown("""
+#### 왜 혈압 수치를 수집하지 않는가
+1. **폭염 관련 법령·지침에 수치 기준이 없다.** 대응지침은 민감군을 진단명으로만 열거한다.
+2. **수치가 나오는 조문은 적용 대상이 다르다.** 시행규칙 제221조(고혈압증 등)는
+   *고기압 업무*(잠수·압기)용이며, 그마저도 진단명만 열거한다.
+3. **판정 권한이 의사에게 있다.** 산업안전보건법 제138조는 근로 금지·제한을
+   의사의 진단에 따르도록 한다.
 
-        st.markdown("""
-#### 산출 근거
-- **체감온도** — 기상청 여름철 체감온도식 (습구온도는 Stull 2011 근사).
-  법령상 31/33/35/38℃ 기준은 모두 **기온이 아니라 체감온도**.
-  미국 NWS Heat Index를 쓰면 같은 조건에서 등급이 1~2단계 어긋난다.
-- **보수적 MAX** — 안전보건규칙은 여러 작업장소 중 *가장 높은 온도* 기준 적용(공간축 MAX).
-  본 시스템은 인체 열 축적을 근거로 이를 **시간축으로 확장**.
-- **측정 원칙** — 주된 작업장소(공정 단위), 바닥 1.2~1.5m 높이, 최고값 적용.
-  측정 곤란 시 기상청 체감온도 활용 가능 → 본 시스템의 예보 기반 운용 근거.
-- **기록 의무** — 작업장소·시간·체감온도·조치사항 일자별 기록, 해당 연도 12/31까지 보관.
+→ 판정할 수 없는 민감정보를 보관하면 개인정보 보호법상 최소수집 원칙에 반하고,
+   사고 시 "알고도 방치했다"는 근거가 될 수 있다.
 
-#### 한계
-- 기상청 격자는 5km 해상도이며 표준 관측환경(잔디·백엽상) 기준.
-  철골 상부·콘크리트면 등 현장 미기후는 반영되지 않는다 → 현장 실측 연동 필요.
-- 체감온도는 기온·습도만 반영하며 **복사열을 포함하지 않는다**.
+#### 개인정보 처리 근거와 제약
+- **처리 근거** — 개인정보 보호법 제23조제1항제2호(법령이 민감정보 처리를 요구·허용).
+  대응지침이 "민감군을 선정하고 적정 배치"할 것을 요구하므로 개인 식별이 불가피하다.
+- **제약** — 산업안전보건법 제132조: ①본인 동의 없는 공개 금지 ②건강 보호·유지 외
+  목적 사용 금지 → 목록에 질환명 미표시, 열람 권한 분리, CSV 2종 분리로 반영.
 
-⚠️ 발표 전 고용노동부 최신 보도자료로 기준 재검증 필요 (매년 갱신).
+⚠️ 법적 논리는 산업보건 분야 전문가(노무사·직업환경의학전문의) 확인을 권장합니다.
 """)
-        st.divider()
-        T.render_basis()
-
-
-if __name__ == "__main__":
-    main()
