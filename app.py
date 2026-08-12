@@ -61,37 +61,71 @@ class HeatTier:
     cycle_hours: float | None   # 휴식 주기(시간)
     rest_minutes: int           # 1회 휴식(분)
     stop_work: bool
-    actions: tuple[str, ...]
+    actions: tuple[tuple[str, str], ...]   # (근거등급, 조치내용)
 
     @property
     def rest_ratio(self) -> float:
         return self.rest_minutes / (self.cycle_hours * 60) if self.cycle_hours else 0.0
 
+    @property
+    def action_texts(self) -> tuple[str, ...]:
+        return tuple(t for _, t in self.actions)
+
+    def actions_by(self, strict: bool) -> tuple[tuple[str, str], ...]:
+        """strict=True면 법적 의무 항목만."""
+        return tuple(a for a in self.actions if a[0] == "의무") if strict else self.actions
+
+
+# ---------------------------------------------------------------------
+# 법정 최소 휴식 — 안전보건규칙 제560조제3항
+#   체감온도 33℃ 이상: 매 2시간 이내 20분 이상 (의무)
+#   35℃ 매시간 15분은 대응지침 14쪽 '권고'이며, 법적 최소는 여전히 2h/20분이다.
+# ---------------------------------------------------------------------
+MANDATORY_MIN_TEMP = 33.0
+MANDATORY_CYCLE_H = 2.0
+MANDATORY_REST_MIN = 20
+
+
+def effective_rest(tier: "HeatTier", strict: bool) -> tuple[float | None, int, str]:
+    """적용할 휴식 (주기, 분, 근거등급). strict=True면 법적 의무 수준만."""
+    if strict:
+        if tier.min_temp >= MANDATORY_MIN_TEMP:
+            return MANDATORY_CYCLE_H, MANDATORY_REST_MIN, "의무"
+        return None, 0, "-"
+    return tier.cycle_hours, tier.rest_minutes, tier.legal
+
 
 # ※ 내림차순 정렬 필수 (classify가 위에서부터 검사)
 HEAT_TIERS: list[HeatTier] = [
     HeatTier(38.0, "CRITICAL", "위험 (폭염중대경보)", "위험", "#7F1D1D", "권고", 1, 15, True, (
-        "긴급조치 작업 외 옥외작업 중지",
-        "온열질환 민감군 옥외작업 제한",
-        "업무담당자 건강상태 확인 강화",
+        ("의무", "매 2시간 이내 20분 이상 휴식 (제560조제3항)"),
+        ("의무", "체감온도·조치사항 일자별 기록·보관 (제562조제2항제3호)"),
+        ("권고", "긴급조치 작업 외 옥외작업 중지"),
+        ("권고", "온열질환 민감군 옥외작업 제한"),
+        ("권고", "업무담당자 건강상태 확인 강화"),
     )),
     HeatTier(35.0, "SEVERE", "심각 (폭염경보)", "심각", "#DC2626", "권고", 1, 15, True, (
-        "매시간 15분 이상 휴식",
-        "14~17시 옥외작업 중지 (불가피한 경우 제외)",
-        "업무담당자 지정 후 근로자 건강상태 확인",
+        ("의무", "매 2시간 이내 20분 이상 휴식 (제560조제3항)"),
+        ("의무", "체감온도·조치사항 일자별 기록·보관 (제562조제2항제3호)"),
+        ("권고", "매시간 15분 이상 휴식"),
+        ("권고", "14~17시 옥외작업 중지 (불가피한 경우 제외)"),
+        ("권고", "업무담당자 지정 후 근로자 건강상태 확인"),
     )),
     HeatTier(33.0, "ALERT", "경계 (폭염주의보)", "경계", "#EA580C", "의무", 2, 20, False, (
-        "2시간 이내 20분 이상 휴식 부여  [법적 의무]",
-        "작업시간대 조정 또는 옥외작업 단축",
-        "체감온도·조치사항 일자별 기록 (연말까지 보관)",
+        ("의무", "매 2시간 이내 20분 이상 휴식 (제560조제3항)"),
+        ("의무", "체감온도·조치사항 일자별 기록·보관 (제562조제2항제3호)"),
+        ("권고", "작업시간대 조정 또는 옥외작업 단축"),
     )),
     HeatTier(31.0, "CAUTION", "주의 (폭염작업)", "주의", "#F59E0B", "의무", None, 0, False, (
-        "폭염안전 5대 기본수칙 이행  [법적 의무]",
-        "작업장소 온·습도계 비치",
-        "2시간 이상 연속작업 지양",
+        ("의무", "냉방·통풍장치, 작업시간 조정, 휴식 중 1개 이상 (제560조제2항)"),
+        ("의무", "작업장소에 온·습도계 상시 비치 (제562조제2항제1호)"),
+        ("의무", "증상·예방·응급조치 요령 사전 주지 (제562조제2항제2호)"),
+        ("의무", "그늘진 장소 제공 (제567조제2항)"),
+        ("의무", "소금과 음료수 비치 (제571조)"),
+        ("권고", "2시간 이상 연속작업 지양"),
     )),
     HeatTier(-99.0, "NORMAL", "관심 (평시)", "평시", "#16A34A", "-", None, 0, False, (
-        "평시 작업 / 수분 섭취 안내",
+        ("권고", "평시 작업 / 수분 섭취 안내"),
     )),
 ]
 
@@ -355,27 +389,39 @@ def build_blocks(day_df: pd.DataFrame, target: date, conservative: bool = True) 
     return pd.DataFrame(rows)
 
 
-def rest_slots(row: pd.Series) -> list[dict]:
-    """블록 내 휴식 타이밍. 휴식이 블록 안에 온전히 들어가는 것만 채택."""
+def rest_slots(row: pd.Series, strict: bool = False) -> list[dict]:
+    """블록 내 휴식 타이밍. 휴식이 블록 안에 온전히 들어가는 것만 채택.
+
+    strict=True → 법정 최소(33℃ 이상 2시간마다 20분)만 산출.
+    35℃의 '매시간 15분'은 지침 권고이며, 법적 최소는 여전히 2시간/20분이다.
+    """
     t = tier_by_code(row["tier_code"])
-    if not t.cycle_hours or not row["is_work"]:
+    cycle, minutes, level = effective_rest(t, strict)
+    if not cycle or not row["is_work"]:
         return []
-    out, cur = [], row["start"] + timedelta(hours=t.cycle_hours)
-    while cur + timedelta(minutes=t.rest_minutes) <= row["end"]:
+    out, cur = [], row["start"] + timedelta(hours=cycle)
+    while cur + timedelta(minutes=minutes) <= row["end"]:
         out.append({"휴식 시작": cur.strftime("%H:%M"),
-                    "휴식 종료": (cur + timedelta(minutes=t.rest_minutes)).strftime("%H:%M"),
-                    "근거": f"{t.short} · {t.legal}"})
-        cur += timedelta(hours=t.cycle_hours)
+                    "휴식 종료": (cur + timedelta(minutes=minutes)).strftime("%H:%M"),
+                    "근거": ("제560조제3항 · 의무" if level == "의무"
+                            else f"{t.short} · {level}")})
+        cur += timedelta(hours=cycle)
     return out
 
 
-def loss_ratio(blocks: pd.DataFrame) -> float:
+def loss_ratio(blocks: pd.DataFrame, strict: bool = False) -> float:
+    """작업시간 손실률. strict=True면 법정 의무 조치만 반영(작업중지 권고 제외)."""
     total = lost = 0.0
     for _, r in blocks[blocks["is_work"]].iterrows():
         h = (r["end"] - r["start"]).seconds / 3600
         t = tier_by_code(r["tier_code"])
+        cycle, minutes, _ = effective_rest(t, strict)
+        ratio = minutes / (cycle * 60) if cycle else 0.0
         total += h
-        lost += h * (1.0 if t.stop_work else t.rest_ratio)
+        if not strict and t.stop_work:
+            lost += h                 # 옥외작업 중지(권고)
+        else:
+            lost += h * ratio
     return round(lost / total * 100, 1) if total else 0.0
 
 
@@ -408,7 +454,7 @@ def build_alarms(blocks: pd.DataFrame, lead: int, trigger: str = "ALERT") -> pd.
             "등급": r["tier_label"], "체감온도": r["at_rep"],
             "메시지": ALARM_TMPL.format(lead=lead, block=r["block_name"],
                                       at=r["at_rep"], tier=t.label,
-                                      legal=t.legal, action=t.actions[0]),
+                                      legal=t.legal, action=t.action_texts[0]),
         })
     return pd.DataFrame(rows)
 
@@ -467,7 +513,8 @@ def timeline(df: pd.DataFrame, title: str) -> go.Figure:
     return fig
 
 
-def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int) -> None:
+def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int,
+               strict: bool = False) -> None:
     blocks = build_blocks(day_df, target, conservative)
     if blocks.empty:
         st.warning("해당 일자의 예보 데이터가 없습니다.")
@@ -482,12 +529,35 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
               delta=f"기온 대비 +{dmax - day_df['ta'].max():.1f}℃")
     c2.metric("통제 등급", dt_.short, delta=dt_.legal, delta_color="off")
     c3.metric("작업중지 블록", f"{int(work['stop_work'].sum())} / {len(work)}")
-    c4.metric("작업시간 손실률", f"{loss_ratio(blocks)}%")
+    c4.metric("작업시간 손실률", f"{loss_ratio(blocks, strict)}%",
+              delta="의무만" if strict else None, delta_color="off")
 
-    if dt_.stop_work:
-        st.error("⚠️ " + " · ".join(dt_.actions), icon="🚨")
-    elif dt_.code != "NORMAL":
-        st.warning("📋 " + " · ".join(dt_.actions), icon="⚠️")
+    # ---- 조치사항: 의무 / 권고 구분 표시 ----
+    acts = dt_.actions_by(strict)
+    if acts:
+        must = [t for lv, t in acts if lv == "의무"]
+        rec = [t for lv, t in acts if lv == "권고"]
+        cm, cr = st.columns(2)
+        with cm:
+            if must:
+                st.markdown("🔴 **법적 의무** — 위반 시 5년 이하 징역 또는 5천만원 이하 벌금")
+                for t in must:
+                    st.markdown(f"- {t}")
+        with cr:
+            if rec and not strict:
+                st.markdown("🟠 **권고** — 고용노동부 대응지침")
+                for t in rec:
+                    st.markdown(f"- {t}")
+            elif strict:
+                st.caption("권고 항목은 숨김 (사이드바에서 해제)")
+
+    # ---- 의무 vs 권고 휴식 비교 ----
+    if dt_.min_temp >= MANDATORY_MIN_TEMP:
+        mc, mm, _ = effective_rest(dt_, True)
+        rc, rm, _ = effective_rest(dt_, False)
+        if (mc, mm) != (rc, rm):
+            st.info(f"🔴 **법적 최소** {mc:.0f}시간마다 {mm}분 (제560조제3항) ／ "
+                    f"🟠 **지침 권고** {rc:.0f}시간마다 {rm}분 (대응지침 14쪽)")
 
     L, R = st.columns([1, 1.35])
     with L:
@@ -501,7 +571,7 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
         st.markdown("##### 블록별 휴식 계획")
         found = False
         for _, r in blocks.iterrows():
-            s = rest_slots(r)
+            s = rest_slots(r, strict)
             if s:
                 found = True
                 st.caption(f"**{r['block_name']}** — {r['tier_label']}")
@@ -562,10 +632,19 @@ def main() -> None:
         st.divider()
         lead = LEAD_OPTIONS[st.radio("사전 알람 시점", list(LEAD_OPTIONS.keys()),
                                      help="현장이 넓거나 고층일수록 이동·마무리 시간이 길어집니다.")]
+        strict = st.toggle("법적 의무만 보기", value=False,
+                           help="켜면 안전보건규칙상 '의무' 조치만 표시합니다. "
+                                "35℃ 매시간 15분은 지침 권고이며, 법적 최소는 "
+                                "여전히 2시간마다 20분입니다.")
         conservative = st.toggle("보수적 MAX 적용", value=True,
                                  help="끄면 블록 평균 기준. A/B 비교 시연용.")
         extra_min = st.slider("민감군 추가 휴식(분)", 0, 30, 10, 5,
-                              help="지침은 '추가 배정'을 요구하나 분량은 미규정 — 현장 설정")
+                              help="지침은 '추가 배정'을 요구하나 분량 미규정 — 현장 설정. "
+                                   "기본 10분은 지침 우수사례 기준")
+        c_a, c_b = st.columns(2)
+        work_start = c_a.text_input("작업 시작", "08:00")
+        work_hours = c_b.number_input("정상작업(h)", 4.0, 12.0, 8.0, 0.5,
+                                      help="근로기준법 제50조 1일 8시간 기준 · 현장 조정 가능")
 
         if not demo and not kma:
             st.error("secrets.toml에 KMA_KEY를 등록하세요.")
@@ -674,8 +753,7 @@ def main() -> None:
             st.info(f"💧 오늘은 **{day_tier.cycle_hours:.0f}시간마다 "
                     f"{day_tier.rest_minutes}분 이상** 휴식이 부여됩니다.")
         if day_tier.stop_work:
-            st.error("🚫 " + day_tier.actions[1] if len(day_tier.actions) > 1
-                     else "🚫 " + day_tier.actions[0], icon="🚨")
+            st.error("🚫 " + day_tier.action_texts[-1], icon="🚨")
 
         st.divider()
         T.render_worker_check(day_tier.code)
@@ -705,13 +783,13 @@ def main() -> None:
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
-            render_day(today_df, today, conservative, lead)
+            render_day(today_df, today, conservative, lead, strict)
 
     with t2:
         if tmr_df.empty:
             st.warning("내일 예보 데이터가 없습니다.")
         else:
-            render_day(tmr_df, tomorrow, conservative, lead)
+            render_day(tmr_df, tomorrow, conservative, lead, strict)
 
     with t6:
         st.caption("휴식 시각별로 전원 휴식과 추가 배정 대상을 함께 산출합니다.")
@@ -722,8 +800,12 @@ def main() -> None:
         if _blocks.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
-            T.render_rest_alarm(_blocks, _tbm, lead, extra_min, rest_slots,
+            T.render_rest_alarm(_blocks, _tbm, lead, extra_min,
+                                lambda b: rest_slots(b, strict),
                                 now.strftime("%H:%M"))
+            st.divider()
+            T.render_acclim_alarm(_tbm, work_start, work_hours, lead,
+                                  now.strftime("%H:%M"))
 
     with t4:
         st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 자동 선별합니다.")
@@ -750,7 +832,7 @@ def main() -> None:
             "체감온도": f"{t.min_temp:.0f}℃ 이상", "등급": t.label,
             "휴식": (f"{t.cycle_hours:.0f}시간마다 {t.rest_minutes}분"
                      if t.cycle_hours else "정기휴식 규정 없음"),
-            "성격": t.legal, "주요 조치": t.actions[0],
+            "성격": t.legal, "주요 조치": t.action_texts[0],
         } for t in HEAT_TIERS if t.min_temp > 0]), hide_index=True,
             use_container_width=True)
 

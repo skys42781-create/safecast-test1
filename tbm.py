@@ -278,6 +278,98 @@ def short_reason(row: pd.Series) -> str:
     return " · ".join(parts[:3])
 
 
+def build_acclim_schedule(tbm: pd.DataFrame, work_start: str, work_hours: float,
+                          lead_min: int) -> pd.DataFrame:
+    """열순응 대상자별 작업 종료 예정 시각.
+
+    [왜 시각으로 바꾸는가]
+      지침은 "1일 정상작업의 20%"라고 정하지만, 현장에서 필요한 것은
+      "몇 시에 빼야 하는가"다. 비율만 표시하면 관리자가 매번 환산해야 하고,
+      환산하지 않으면 지켜지지 않는다.
+
+    [정상작업 시간]
+      지침은 '정상작업'의 시간을 정의하지 않는다. 근로기준법 제50조의
+      1일 법정근로시간 8시간을 기본값으로 두되 현장이 조정한다. (설정값)
+
+    [주의]
+      휴식시간을 제외한 실작업 기준이 아니라 작업시간대 기준의 단순 환산이다.
+      실제 적용 시 휴식 부여분을 반영해 조정할 수 있다.
+    """
+    if tbm.empty:
+        return pd.DataFrame()
+
+    base = pd.Timestamp(f"2000-01-01 {work_start}")
+    rows = []
+    for _, r in tbm.iterrows():
+        if r["_ratio"] == "":
+            continue
+        ratio = int(r["_ratio"])
+        minutes = work_hours * 60 * ratio / 100
+        end = base + pd.Timedelta(minutes=minutes)
+        rows.append({
+            "성명": r["성명"], "공종": r["공종"], "트랙": r["_track"],
+            "허용": f"{ratio}%",
+            "허용시간": f"{int(minutes // 60)}시간 {int(minutes % 60)}분",
+            "종료예정": end.strftime("%H:%M"),
+            "알람": (end - pd.Timedelta(minutes=lead_min)).strftime("%H:%M"),
+            "_end": end.strftime("%H:%M"),
+        })
+    out = pd.DataFrame(rows)
+    return out.sort_values("_end") if not out.empty else out
+
+
+def render_acclim_alarm(tbm: pd.DataFrame, work_start: str, work_hours: float,
+                        lead_min: int, now_hm: str) -> None:
+    """열순응 종료 알람 — 시각별로 누구를 빼야 하는지."""
+    sched = build_acclim_schedule(tbm, work_start, work_hours, lead_min)
+
+    st.markdown("##### 🌡️ 열순응 작업 종료 알람")
+    if sched.empty:
+        st.info("열순응 프로그램 진행 중인 근로자가 없습니다.")
+        return
+
+    st.caption(f"정상작업 {work_hours:g}시간 · {work_start} 시작 기준 환산")
+
+    # 종료시각이 같은 사람끼리 묶어서 알람 단위로
+    for end, g in sched.groupby("_end", sort=True):
+        past = end <= now_hm
+        alarm = g.iloc[0]["알람"]
+        names = " ".join(f"{r['성명']}({r['트랙']} {r['허용']})"
+                         for _, r in g.iterrows())
+        color = "#94A3B8" if past else "#B45309"
+        tag = "종료됨" if past else f"📢 {alarm} 알람"
+        st.markdown(
+            f'''<div style="border-left:6px solid {color};background:#FFFBEB;
+                    padding:12px 16px;border-radius:8px;margin-bottom:8px;
+                    {"opacity:.5;" if past else ""}">
+              <div style="font-size:12px;color:#78350F;">{tag}</div>
+              <div style="font-size:22px;font-weight:800;color:{color};">
+                  {end} 작업 종료 · {len(g)}명</div>
+              <div style="font-size:12.5px;color:#78350F;">{names}</div>
+            </div>''', unsafe_allow_html=True)
+
+    st.dataframe(sched[["성명", "공종", "트랙", "허용", "허용시간", "종료예정", "알람"]],
+                 hide_index=True, use_container_width=True)
+    st.download_button("📥 열순응 일정 CSV",
+                       sched.drop(columns="_end").to_csv(index=False).encode("utf-8-sig"),
+                       file_name="열순응_일정.csv", mime="text/csv")
+
+    st.markdown("###### 📢 전달 문구")
+    for end, g in sched.groupby("_end", sort=True):
+        alarm = g.iloc[0]["알람"]
+        lines = "\n".join(f"  · {r['성명']} ({r['공종']}) — {r['트랙']} {r['허용']}"
+                          for _, r in g.iterrows())
+        msg = (f"[Safecast] {lead_min}분 후 열순응 대상자 작업 종료\n"
+               f"· {end}까지만 폭염작업 후 철수 또는 실내 전환\n"
+               f"{lines}\n"
+               f"· 근거: 대응지침 19쪽 열순응 프로그램")
+        with st.expander(f"{alarm} → {end} 종료 ({len(g)}명)"):
+            st.code(msg, language=None)
+
+    st.info("온열질환 산재 사망자의 **41.9%가 투입 첫날**, 29.0%가 둘째날에 "
+            "발생했습니다. 1~2일차 대상자를 우선 확인하세요.")
+
+
 def build_rest_alarms(blocks: pd.DataFrame, tbm: pd.DataFrame,
                       lead_min: int, extra_min: int,
                       rest_slots_fn) -> pd.DataFrame:
@@ -315,7 +407,7 @@ def build_rest_alarms(blocks: pd.DataFrame, tbm: pd.DataFrame,
                     pd.Timedelta(minutes=lead_min)).strftime("%H:%M")
             rows.append({
                 "발송시각": send, "휴식시작": start, "휴식종료": end,
-                "추가종료": ext_end, "블록": b["block_name"],
+                "추가종료(설정)": ext_end, "블록": b["block_name"],
                 "등급": b["tier_label"], "근거": slot["근거"],
                 "추가대상": len(targets),
             })
@@ -345,7 +437,7 @@ def render_rest_alarm(blocks: pd.DataFrame, tbm: pd.DataFrame, lead_min: int,
               <div style="font-size:32px;font-weight:800;line-height:1.2;">
                   {r["휴식시작"]} ~ {r["휴식종료"]}</div>
               <div style="font-size:14px;opacity:.9;">
-                  전원 휴식 · 추가 배정 {r["추가대상"]}명은 {r["추가종료"]}까지</div>
+                  전원 휴식 · 추가 배정 {r["추가대상"]}명은 {r["추가종료(설정)"]}까지</div>
               <div style="font-size:12px;opacity:.75;margin-top:4px;">
                   📢 {r["발송시각"]}에 알람을 전달하세요</div>
             </div>''', unsafe_allow_html=True)
@@ -353,7 +445,7 @@ def render_rest_alarm(blocks: pd.DataFrame, tbm: pd.DataFrame, lead_min: int,
         st.success("오늘 예정된 휴식이 모두 지났습니다.")
 
     st.dataframe(
-        alarms[["발송시각", "휴식시작", "휴식종료", "추가종료", "블록", "등급", "근거"]],
+        alarms[["발송시각", "휴식시작", "휴식종료", "추가종료(설정)", "블록", "등급", "근거"]],
         hide_index=True, use_container_width=True)
 
     # ---- 추가 배정 대상 명단 ----
@@ -365,6 +457,9 @@ def render_rest_alarm(blocks: pd.DataFrame, tbm: pd.DataFrame, lead_min: int,
                      height=min(320, 40 + 35 * len(targets)))
         st.caption("근거: 대응지침 14쪽(35·38℃ 조치) · 18쪽 민감군 관리방법 ④ "
                    "— 민감군·고강도 작업자는 휴식시간 추가 배정")
+        st.caption("🔵 **추가 시간은 설정값** — 지침은 '추가 배정'을 요구하나 분량은 "
+                   "미규정. 기본값 10분은 지침 우수사례(조선 A사 10분 연장, "
+                   "건설 B사 20→30분)를 따름.")
 
     # ---- 발송 메시지 ----
     st.markdown("##### 📢 전달 문구")
@@ -374,7 +469,7 @@ def render_rest_alarm(blocks: pd.DataFrame, tbm: pd.DataFrame, lead_min: int,
                          zip(targets["성명"], targets["사유"])) if not targets.empty else "없음"
         msg = (f"[Safecast] {lead_min}분 후 휴식시간입니다\n"
                f"· {r['휴식시작']}~{r['휴식종료']} 전원 휴식 ({r['근거']})\n"
-               f"· 추가 배정 {len(targets)}명 — {r['추가종료']}까지\n"
+               f"· 추가 배정 {len(targets)}명 — {r['추가종료(설정)']}까지\n"
                f"  {names}\n"
                f"· 안전관리자: 휴게시설 냉방·음용수 상태를 지금 점검하세요")
         with st.expander(f"{r['발송시각']} → {r['휴식시작']} 휴식 ({r['블록']})"):
@@ -711,6 +806,27 @@ def render_basis() -> None:
   대응지침이 "민감군을 선정하고 적정 배치"할 것을 요구하므로 개인 식별이 불가피하다.
 - **제약** — 산업안전보건법 제132조: ①본인 동의 없는 공개 금지 ②건강 보호·유지 외
   목적 사용 금지 → 목록에 질환명 미표시, 열람 권한 분리, CSV 2종 분리로 반영.
+
+#### 의무와 권고는 무엇이 다른가
+| | 성격 | 위반 시 |
+|---|---|---|
+| **안전보건규칙** (33℃ 2시간/20분 등) | 의무 | 산안법 제168조 — 5년 이하 징역 또는 5천만원 이하 벌금 |
+| **폭염 대응지침** (열순응·민감군·35·38℃ 조치) | 권고 | 직접 처벌 없음 |
+
+지침은 목차에서 스스로 「사업주의 온열질환 예방체계 마련(**권고**)」이라 밝히고 있으며,
+문장도 "도입할 필요가 있습니다" 형태다.
+
+#### 그럼에도 지침을 따라야 하는 이유
+1. **보건조치 의무의 이행 판단 기준** — 산안법 제39조는 보건조치를 *의무*로 두고
+   구체적 내용은 하위 규정에 위임한다. 이행 여부를 판단할 때 노동부 지침이
+   사실상 기준으로 참조된다.
+2. **예견가능성** — 고용노동부가 *"온열질환 산재 사망자의 41.9%가 투입 첫날"*을
+   공개 문서로 공표했다. 그 위험을 알 수 있었다는 뜻이며,
+   열순응 미이행 상태에서 신규 투입자가 첫날 사망하면 "몰랐다"는 방어가 어렵다.
+
+→ 본 시스템은 **"권고니까 안 해도 된다"가 아니라 "권고지만 안 하면 위험하다"**를
+   전제로 설계했다. 지침에 수치가 있는 항목(열순응 20/40/60/80/100 등)은 그대로 적용하고,
+   수치가 없는 항목(민감군 추가 휴식 분량 등)만 현장 설정값으로 분리했다.
 
 ⚠️ 법적 논리는 산업보건 분야 전문가(노무사·직업환경의학전문의) 확인을 권장합니다.
 """)
