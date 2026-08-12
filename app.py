@@ -141,27 +141,24 @@ class WorkBlock:
 
 # ---------------------------------------------------------------------
 # 공정 블록 구성
-#   피크(14~17시)는 대응지침 14쪽의 '무더위 시간대'로 법정 구간이므로 쪼개지 않는다.
-#   반면 오전 4시간은 우리가 임의로 잡은 구간이며, 보수적 MAX와 결합하면
-#   1시간 스파이크로 4시간 전체가 상향되어 과대 등급이 발생한다.
-#   → 오전만 2시간 단위로 세분한다. (🔵 설정: 지침 미규정, 현장 조정 가능)
+#
+#   피크 14~17시 — 대응지침 14쪽 '무더위 시간대'. 법정 구간이므로 쪼개지 않는다.
+#   오전 2+2시간 — 지침 미규정 구간. 2시간으로 나눈 근거:
+#     ① 보수적 MAX는 블록 내 최고값을 전체에 적용하므로, 블록이 길수록
+#        1시간 스파이크의 오염 범위가 넓어진다 (4h → 4시간 전부 상향).
+#     ② 법정 휴식 주기가 2시간(제560조제3항)이라 블록 1개 = 휴식 주기 1개로 맞는다.
+#     ③ 인체 열 축적 시상수가 1~2시간이므로 2시간이 적정 상한이다.
+#     ④ 1시간까지 쪼개면 예보 오차(±1.2℃)가 시간 간 변동폭(0.3℃)보다 커져
+#        노이즈가 등급으로 옮겨가고, 알람 피로가 발생한다.
+#   → 과대 경보를 줄이는 것이 곧 안전이다. 경보가 반복되면 무시하기 시작한다.
 # ---------------------------------------------------------------------
-WORK_BLOCKS_FINE: list[WorkBlock] = [
+WORK_BLOCKS: list[WorkBlock] = [
     WorkBlock("morning1", "오전 1부", 8, 10),
     WorkBlock("morning2", "오전 2부", 10, 12),
     WorkBlock("lunch", "점심·휴게", 12, 14, is_work=False),
     WorkBlock("peak", "피크 (무더위 시간대)", 14, 17),
     WorkBlock("closing", "마무리·철수", 17, 18),
 ]
-
-WORK_BLOCKS_COARSE: list[WorkBlock] = [
-    WorkBlock("morning", "오전 작업", 8, 12),
-    WorkBlock("lunch", "점심·휴게", 12, 14, is_work=False),
-    WorkBlock("peak", "피크 (무더위 시간대)", 14, 17),
-    WorkBlock("closing", "마무리·철수", 17, 18),
-]
-
-WORK_BLOCKS = WORK_BLOCKS_FINE          # 기본값
 
 LEAD_OPTIONS = {"20분 (소규모 현장)": 20, "30분 (대규모·고층 현장)": 30}
 
@@ -682,11 +679,6 @@ def main() -> None:
                                 "여전히 2시간마다 20분입니다.")
         conservative = st.toggle("보수적 MAX 적용", value=True,
                                  help="끄면 블록 평균 기준. A/B 비교 시연용.")
-        block_mode = st.radio(
-            "공정 블록 구성", ["세분 (오전 2+2h)", "통합 (오전 4h)"],
-            help="피크 14~17시는 법정 구간이라 고정. 오전 구간만 조정합니다.")
-        blocks_def = WORK_BLOCKS_FINE if block_mode.startswith("세분") \
-            else WORK_BLOCKS_COARSE
         extra_min = st.slider("민감군 추가 휴식(분)", 0, 30, 10, 5,
                               help="지침은 '추가 배정'을 요구하나 분량 미규정 — 현장 설정. "
                                    "기본 10분은 지침 우수사례 기준")
@@ -841,17 +833,17 @@ def main() -> None:
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
-            render_day(today_df, today, conservative, lead, strict, blocks_def)
+            render_day(today_df, today, conservative, lead, strict)
 
     with t2:
         if tmr_df.empty:
             st.warning("내일 예보 데이터가 없습니다.")
         else:
-            render_day(tmr_df, tomorrow, conservative, lead, strict, blocks_def)
+            render_day(tmr_df, tomorrow, conservative, lead, strict)
 
     with t6:
         st.caption("휴식 시각별로 전원 휴식과 추가 배정 대상을 함께 산출합니다.")
-        _blocks = build_blocks(today_df, today, conservative, blocks_def) \
+        _blocks = build_blocks(today_df, today, conservative) \
             if not today_df.empty \
             else pd.DataFrame()
         _tbm = day_tbm
