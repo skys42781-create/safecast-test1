@@ -26,6 +26,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+import records as R
 import tbm as T
 
 KST = ZoneInfo("Asia/Seoul")
@@ -819,9 +820,9 @@ def main() -> None:
         st.session_state["_roster"] = roster
     day_tbm = T.build_tbm(roster, day_tier.code)
 
-    t1, t2, t6, t4, t3 = st.tabs(
+    t1, t2, t6, t4, t7, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-         "⏰ 알람", "👷 TBM 타겟 명단", "📖 법적 근거"])
+         "⏰ 알람", "👷 TBM 타겟 명단", "📝 조치 기록", "📖 법적 근거"])
 
     with t1:
         if today_df.empty:
@@ -881,6 +882,15 @@ def main() -> None:
 
         st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
+
+    with t7:
+        _b = build_blocks(today_df, today, conservative) if not today_df.empty \
+            else pd.DataFrame()
+        _src = ("현장 실측" if False else
+                ("기상청 격자(5km) 예보" if demo is False else "데모 데이터"))
+        R.render(_b, today_df, today, name, _src,
+                 int(roster["옥외작업"].sum()) if not roster.empty else 0,
+                 lambda b: rest_slots(b, strict), tier_by_code, classify)
 
     with t3:
         st.dataframe(pd.DataFrame([{
