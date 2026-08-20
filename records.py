@@ -33,8 +33,12 @@ import streamlit as st
 # 상수
 # =====================================================================
 
+# 시간별 원본 + 블록 판정값을 한 줄에 함께 남긴다.
+#   원본  — 그 시각 실제로 얼마였는가 (감독 질의 대응)
+#   판정  — 우리가 어떤 값으로 조치를 결정했는가 (보수적 MAX 적용 근거)
 TEMP_LOG_COLS = ["일자", "시각", "작업장소", "측정출처", "기온", "습도",
-                 "체감온도", "등급", "근거조문"]
+                 "체감온도", "등급", "블록", "블록판정값", "블록등급",
+                 "등급변동", "근거조문"]
 
 ACTION_LOG_COLS = ["일자", "예정시각", "작업장소", "체감온도", "등급", "조치사항",
                    "근거조문", "대상인원", "이행여부", "조치시각", "미이행사유", "조치자"]
@@ -66,13 +70,17 @@ def _init() -> None:
 
 
 def record_temp(target_date, hhmm: str, place: str, source: str,
-                ta: float, rh: float, at: float, tier) -> None:
-    """온도·등급 기록 1행. 중복 시각은 덮어쓴다."""
+                ta: float, rh: float, at: float, tier,
+                block: str = "-", block_at: str = "-", block_tier: str = "-",
+                changed: str = "") -> None:
+    """시간별 온도 기록 1행. 같은 일자·시각·장소는 덮어쓴다."""
     _init()
     row = {
         "일자": str(target_date), "시각": hhmm, "작업장소": place,
         "측정출처": source, "기온": ta, "습도": rh, "체감온도": at,
         "등급": tier.label,
+        "블록": block, "블록판정값": block_at, "블록등급": block_tier,
+        "등급변동": changed,
         "근거조문": _article_of(tier),
     }
     log = st.session_state["temp_log"]
@@ -199,38 +207,55 @@ def render(blocks: pd.DataFrame, hourly: pd.DataFrame, target_date,
 
     # ---- 1) 온도·등급 기록 (자동) ----
     st.markdown("##### ① 체감온도 기록 · 자동")
-    if blocks.empty or hourly.empty:
+    st.caption("법령은 '일자별' 기록만 요구하나(제562조제2항제3호), 온열질환은 특정 "
+               "시각에 발생하므로 **시간별 원본**과 **블록 판정값**을 함께 남깁니다.")
+
+    if hourly.empty:
         st.info("예보 데이터가 없어 기록할 내용이 없습니다.")
     else:
-        # 블록 시작 시각마다 1행
-        for _, b in blocks.iterrows():
-            if not b["is_work"]:
-                continue
-            row = hourly[hourly["hour"] == b["peak_hour"]]
-            if row.empty:
-                continue
-            r = row.iloc[0]
-            record_temp(target_date, b["start"].strftime("%H:%M"),
-                        f"{place} · {b['block_name']}", source,
-                        float(r["ta"]), float(r["rh"]), float(b["at_rep"]),
-                        tier_by_code_fn(b["tier_code"]))
+        # 시각 → 소속 블록 매핑
+        blk = {}
+        if not blocks.empty:
+            for _, b in blocks.iterrows():
+                for h in range(b["start"].hour, b["end"].hour):
+                    blk[h] = b
 
-        # 등급이 바뀌는 시각도 별도 기록 — "언제 알았는가"가 남아야 한다
         prev = None
         for r in hourly.sort_values("hour").itertuples():
             t = classify_fn(r.at)
-            if prev is not None and t.code != prev:
-                record_temp(target_date, f"{r.hour:02d}:00",
-                            f"{place} · 등급변동", source,
-                            float(r.ta), float(r.rh), float(r.at), t)
-            prev = t.code
+            b = blk.get(r.hour)
+
+            # 등급 변동 표시 — "언제 알았는가"가 남아야 방어가 된다
+            changed = ""
+            if prev is not None and t.code != prev[0]:
+                changed = f"{prev[1]} → {t.short}"
+            prev = (t.code, t.short)
+
+            record_temp(
+                target_date, f"{r.hour:02d}:00", place, source,
+                float(r.ta), float(r.rh), float(r.at), t,
+                block=(b["block_name"] if b is not None else "-"),
+                block_at=(f"{b['at_rep']}" if b is not None else "-"),
+                block_tier=(tier_by_code_fn(b["tier_code"]).short
+                            if b is not None else "-"),
+                changed=changed)
 
         df = temp_log_df()
-        st.dataframe(df, hide_index=True, use_container_width=True, height=260)
+        st.dataframe(df, hide_index=True, use_container_width=True, height=320)
+
+        n_change = int((df["등급변동"] != "").sum()) if not df.empty else 0
+        c1, c2, c3 = st.columns(3)
+        c1.metric("기록 행수", f"{len(df)}행")
+        c2.metric("등급 변동", f"{n_change}회")
+        c3.metric("최고 체감온도", f"{df['체감온도'].max():.1f}℃" if not df.empty else "-")
+
         st.caption(f"측정출처: **{source}** · "
-                   + ("현장 실측" if "실측" in source else
-                      "기상보다 정확한 실측이 없어 기상청 체감온도를 활용 "
+                   + ("현장 실측 (제562조제2항제1호 온·습도계)" if "실측" in source else
+                      "현장 측정이 곤란하여 기상청 체감온도를 활용 "
                       "(안전보건규칙 제559조제4항)"))
+        st.caption("**블록판정값**은 보수적 MAX를 적용한 조치 결정 기준입니다. "
+                   "그 시각 실측값(체감온도 열)과 다를 수 있으며, 두 값을 모두 "
+                   "남겨 판정 근거를 추적할 수 있게 했습니다.")
 
     st.divider()
 
