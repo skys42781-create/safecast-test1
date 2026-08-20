@@ -30,7 +30,12 @@ jobs:
       - name: 의존성 설치
         run: pip install requests pandas
 
+      # 기상청 API 일시 장애로 한 회차가 실패해도 워크플로 전체를 멈추지 않는다.
+      # 실황은 매시 15분·45분 두 번 시도하므로 다음 회차가 같은 시각을 복구한다.
       - name: 수집 실행
+        id: collect
+        continue-on-error: true
+        timeout-minutes: 5
         env:
           KMA_KEY: ${{ secrets.KMA_KEY }}
         run: python scripts/collect.py

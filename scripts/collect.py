@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -39,11 +40,8 @@ import requests
 # 수집 대상 현장. 여러 곳을 동시에 모을 수 있다.
 # 실제 대상 현장이 정해지면 좌표만 바꾸면 된다.
 SITES = [
-    {"name": "seoul",     "lat": 37.5665,    "lon": 126.9780},  # 내륙 도시(열섬)
-    {"name": "busan",     "lat": 35.1798,    "lon": 129.0750},  # 해안
-    {"name": "daegu",     "lat": 35.8714,    "lon": 128.6014},  # 분지
-    {"name": "gangneung", "lat": 37.7519,    "lon": 128.8761},  # 동해안·산지
-    {"name": "high1",     "lat": 37.2074566, "lon": 128.8253198},  # 고지대·대회장
+    {"name": "seoul",  "lat": 37.5665, "lon": 126.9780},
+    {"name": "busan",  "lat": 35.1798, "lon": 129.0750},
 ]
 
 # 예보 중 저장할 구간 (시간). 0~48이면 오늘~모레까지.
@@ -133,12 +131,36 @@ def latest_ncst_base(now: datetime) -> datetime:
 # API 호출
 # =====================================================================
 
+REQUEST_TIMEOUT = 10      # 정상 응답은 1~2초. 오래 기다릴 이유가 없다.
+RETRY = 2                 # 일시 장애 대비 재시도
+RETRY_WAIT = 3            # 재시도 간격(초)
+CALL_GAP = 0.4            # 연속 호출 간 간격 — 초당 제한 회피
+DEADLINE_SEC = 150        # 전체 예산. 초과하면 남은 지점을 건너뛰고 지금까지 것을 저장
+
+
 def call(endpoint: str, key: str, **params) -> list[dict]:
-    r = requests.get(f"{BASE_URL}/{endpoint}", timeout=30, params={
-        KEY_PARAM: key, "pageNo": 1, "dataType": "JSON", **params})
-    r.raise_for_status()
-    body = r.json()["response"]["body"]
-    return body["items"]["item"]
+    """API 호출. 일시 장애에 대비해 재시도한다.
+
+    [왜 재시도가 필요한가]
+      기상청 API는 간헐적으로 응답하지 않는다. 재시도 없이 두면
+      그 회차 수집이 통째로 실패하고, 워크플로가 5분간 타임아웃을 기다린다.
+    """
+    last = None
+    for attempt in range(1, RETRY + 1):
+        try:
+            time.sleep(CALL_GAP)
+            r = requests.get(f"{BASE_URL}/{endpoint}", timeout=REQUEST_TIMEOUT,
+                             params={KEY_PARAM: key, "pageNo": 1,
+                                     "dataType": "JSON", **params})
+            r.raise_for_status()
+            return r.json()["response"]["body"]["items"]["item"]
+        except Exception as e:
+            last = e
+            if attempt < RETRY:
+                print(f"    재시도 {attempt}/{RETRY - 1} ({type(e).__name__})",
+                      file=sys.stderr)
+                time.sleep(RETRY_WAIT)
+    raise last
 
 
 def fetch_forecast(nx: int, ny: int, key: str, base: datetime) -> pd.DataFrame:
@@ -195,6 +217,8 @@ def main() -> int:
         print("ERROR: 환경변수 KMA_KEY가 없습니다.", file=sys.stderr)
         return 1
 
+    deadline = time.monotonic() + DEADLINE_SEC
+
     now = now_kst()
     fbase = latest_fcst_base(now)
     nbase = latest_ncst_base(now)
@@ -203,6 +227,12 @@ def main() -> int:
     fcst_rows, obs_rows = [], []
 
     for site in SITES:
+        # 예산 초과 시 남은 지점을 포기하고 지금까지 모은 것을 저장한다.
+        # 전부 잃는 것보다 일부라도 남기는 편이 낫다.
+        if time.monotonic() > deadline:
+            print(f"  ⏱ 시간 예산({DEADLINE_SEC}s) 초과 — 남은 지점 건너뜀",
+                  file=sys.stderr)
+            break
         nx, ny = latlon_to_grid(site["lat"], site["lon"])
 
         # ---- 예보 ----
@@ -237,7 +267,9 @@ def main() -> int:
             print(f"  {site['name']}: 실황 실패 — {e}", file=sys.stderr)
 
     if not fcst_rows and not obs_rows:
-        print("수집된 데이터가 없습니다.", file=sys.stderr)
+        # 전 지점 실패 = 기상청 API 장애일 가능성이 높다.
+        # 다음 회차(30분 뒤)에 같은 시각을 다시 시도하므로 데이터 손실은 제한적이다.
+        print("⚠️ 수집된 데이터가 없습니다 — 기상청 API 응답 없음", file=sys.stderr)
         return 1
 
     if fcst_rows:
