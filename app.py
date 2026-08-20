@@ -16,6 +16,8 @@ Safecast — 스마트 건설 폭염 관제 대시보드
 from __future__ import annotations
 
 import math
+import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -261,6 +263,35 @@ def latlon_to_grid(lat: float, lon: float) -> tuple[int, int]:
 
 FCST_BASE_HOURS = [2, 5, 8, 11, 14, 17, 20, 23]
 
+# ---------------------------------------------------------------------
+# API 호출 공통
+#   ⚠️ 예외 메시지에는 요청 URL이 통째로 들어가고, 거기에 인증키가 포함된다.
+#      공개 배포된 앱에서 그대로 표시하면 키가 노출되므로 반드시 가린다.
+# ---------------------------------------------------------------------
+API_TIMEOUT = (10, 12)   # (연결, 응답)
+API_RETRY = 3
+API_WAIT = 2
+
+
+def mask_secret(msg: str) -> str:
+    """오류 문자열에서 인증키를 가린다."""
+    return re.sub(r"((?:authKey|serviceKey)=)[^&\s\)\']+", r"\1***", str(msg))
+
+
+def api_get(url: str, params: dict) -> dict:
+    """재시도 포함 GET. 기상청 API는 간헐적으로 연결이 지연된다."""
+    last = None
+    for attempt in range(API_RETRY):
+        try:
+            r = requests.get(url, params=params, timeout=API_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last = e
+            if attempt < API_RETRY - 1:
+                time.sleep(API_WAIT)
+    raise RuntimeError(mask_secret(last))
+
 
 def now_kst() -> datetime:
     return datetime.now(KST).replace(tzinfo=None)
@@ -293,11 +324,10 @@ def latest_ultra_base(now: datetime) -> tuple[str, str]:
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_ultra_fcst(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame:
     """초단기예보 → [datetime, ta, rh]. 실황이 아직 안 나온 현재 시각을 메운다."""
-    r = requests.get(f"{BASE_URL}/getUltraSrtFcst", timeout=15, params={
+    js = api_get(f"{BASE_URL}/getUltraSrtFcst", {
         KEY_PARAM: key, "pageNo": 1, "numOfRows": 300, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
-    r.raise_for_status()
-    items = r.json()["response"]["body"]["items"]["item"]
+    items = js["response"]["body"]["items"]["item"]
 
     raw = pd.DataFrame(items)
     want = {"T1H": "ta", "REH": "rh"}
@@ -316,11 +346,10 @@ def fetch_ultra_fcst(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFra
 @st.cache_data(ttl=600, show_spinner="기상청 실황 수신 중…")
 def fetch_now(nx: int, ny: int, key: str, bd: str, bt: str) -> dict:
     """초단기실황 → {T1H: 기온, REH: 습도, ...}"""
-    r = requests.get(f"{BASE_URL}/getUltraSrtNcst", timeout=15, params={
+    js = api_get(f"{BASE_URL}/getUltraSrtNcst", {
         KEY_PARAM: key, "pageNo": 1, "numOfRows": 100, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
-    r.raise_for_status()
-    items = r.json()["response"]["body"]["items"]["item"]
+    items = js["response"]["body"]["items"]["item"]
     return {i["category"]: float(i["obsrValue"]) for i in items}
 
 
@@ -330,11 +359,10 @@ def fetch_forecast(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame
 
     ⚠️ numOfRows는 1000 이상. 300이면 뒤쪽 시간대가 잘려 0℃로 표시된다.
     """
-    r = requests.get(f"{BASE_URL}/getVilageFcst", timeout=20, params={
+    js = api_get(f"{BASE_URL}/getVilageFcst", {
         KEY_PARAM: key, "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
-    r.raise_for_status()
-    items = r.json()["response"]["body"]["items"]["item"]
+    items = js["response"]["body"]["items"]["item"]
 
     raw = pd.DataFrame(items)
     want = {"TMP": "ta", "REH": "rh"}
@@ -718,7 +746,10 @@ def main() -> None:
             fc = enrich(fetch_forecast(nx, ny, kma, bd, bt))
             src = f"🟢 단기예보 {bt[:2]}시 발표"
         except Exception as e:
-            st.error(f"예보 API 실패 → 데모 데이터 대체\n\n`{e}`")
+            st.error("기상청 API에 연결하지 못했습니다 → 데모 데이터로 대체합니다. "
+                     "잠시 후 새로고침해 주세요.", icon="⚠️")
+            with st.expander("오류 상세"):
+                st.code(mask_secret(e)[:500], language=None)
             fc, src = enrich(demo_forecast(today, 2, 34.0)), "🔴 API 실패"
         try:
             nb, nt = latest_ncst_base(now)
