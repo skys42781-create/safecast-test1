@@ -40,8 +40,11 @@ import requests
 # 수집 대상 현장. 여러 곳을 동시에 모을 수 있다.
 # 실제 대상 현장이 정해지면 좌표만 바꾸면 된다.
 SITES = [
-    {"name": "seoul",  "lat": 37.5665, "lon": 126.9780},
-    {"name": "busan",  "lat": 35.1798, "lon": 129.0750},
+    {"name": "seoul",     "lat": 37.5665,    "lon": 126.9780},     # 내륙 도시(열섬)
+    {"name": "busan",     "lat": 35.1798,    "lon": 129.0750},     # 해안
+    {"name": "daegu",     "lat": 35.8714,    "lon": 128.6014},     # 분지
+    {"name": "gangneung", "lat": 37.7519,    "lon": 128.8761},     # 동해안·산지
+    {"name": "high1",     "lat": 37.2074566, "lon": 128.8253198},  # 고지대·대회장
 ]
 
 # 예보 중 저장할 구간 (시간). 0~48이면 오늘~모레까지.
@@ -131,11 +134,14 @@ def latest_ncst_base(now: datetime) -> datetime:
 # API 호출
 # =====================================================================
 
-REQUEST_TIMEOUT = 10      # 정상 응답은 1~2초. 오래 기다릴 이유가 없다.
-RETRY = 2                 # 일시 장애 대비 재시도
-RETRY_WAIT = 3            # 재시도 간격(초)
+# (연결 수립, 응답 대기) 분리.
+#   ConnectTimeout이 잦다 = 서버가 느린 게 아니라 연결이 안 맺어지는 상황.
+#   연결은 넉넉히 기다리고, 응답 대기는 짧게 끊는다.
+REQUEST_TIMEOUT = (20, 15)
+RETRY = 3                 # 일시 장애 대비 재시도
+RETRY_WAIT = 5            # 재시도 간격(초)
 CALL_GAP = 0.4            # 연속 호출 간 간격 — 초당 제한 회피
-DEADLINE_SEC = 150        # 전체 예산. 초과하면 남은 지점을 건너뛰고 지금까지 것을 저장
+DEADLINE_SEC = 300        # 전체 예산. 초과하면 남은 작업을 포기하고 지금까지 것을 저장
 
 
 def call(endpoint: str, key: str, **params) -> list[dict]:
@@ -226,16 +232,42 @@ def main() -> int:
 
     fcst_rows, obs_rows = [], []
 
-    for site in SITES:
-        # 예산 초과 시 남은 지점을 포기하고 지금까지 모은 것을 저장한다.
-        # 전부 잃는 것보다 일부라도 남기는 편이 낫다.
-        if time.monotonic() > deadline:
-            print(f"  ⏱ 시간 예산({DEADLINE_SEC}s) 초과 — 남은 지점 건너뜀",
-                  file=sys.stderr)
-            break
-        nx, ny = latlon_to_grid(site["lat"], site["lon"])
+    # 지점 순서를 매 실행마다 회전시킨다.
+    #   고정 순서면 예산 초과 시 항상 뒤쪽 지점만 손해를 본다.
+    #   시각 기반 회전으로 모든 지점이 고르게 기회를 얻는다.
+    offset = (now.hour * 2 + (0 if now.minute < 30 else 1)) % len(SITES)
+    sites = SITES[offset:] + SITES[:offset]
+    grids = {s["name"]: latlon_to_grid(s["lat"], s["lon"]) for s in sites}
 
-        # ---- 예보 ----
+    def over_budget(label: str) -> bool:
+        if time.monotonic() > deadline:
+            print(f"  ⏱ 시간 예산({DEADLINE_SEC}s) 초과 — {label} 중단", file=sys.stderr)
+            return True
+        return False
+
+    # ---- 1단계: 실황 (가볍고 빠름 · 시각이 고정되어 놓치면 그 회차엔 복구 불가) ----
+    for site in sites:
+        if over_budget("실황"):
+            break
+        nx, ny = grids[site["name"]]
+        try:
+            n = fetch_ncst(nx, ny, key, nbase)
+            if "T1H" in n and "REH" in n:
+                obs_rows.append({
+                    "site": site["name"], "nx": nx, "ny": ny,
+                    "obs_dt": nbase.strftime("%Y-%m-%d %H:00"),
+                    "ta": n["T1H"], "rh": n["REH"],
+                    "at": apparent_temp(n["T1H"], n["REH"]),
+                })
+                print(f"  {site['name']}: 실황 {n['T1H']}℃ / {n['REH']}%")
+        except Exception as e:
+            print(f"  {site['name']}: 실황 실패 — {type(e).__name__}", file=sys.stderr)
+
+    # ---- 2단계: 예보 (무겁지만 발표시각이 3시간마다라 다음 회차가 같은 값을 복구) ----
+    for site in sites:
+        if over_budget("예보"):
+            break
+        nx, ny = grids[site["name"]]
         try:
             df = fetch_forecast(nx, ny, key, fbase)
             df["lead_h"] = ((df["target_dt"] - fbase).dt.total_seconds() / 3600).astype(int)
@@ -250,25 +282,13 @@ def main() -> int:
                 })
             print(f"  {site['name']}: 예보 {len(df)}건")
         except Exception as e:
-            print(f"  {site['name']}: 예보 실패 — {e}", file=sys.stderr)
+            print(f"  {site['name']}: 예보 실패 — {type(e).__name__}", file=sys.stderr)
 
-        # ---- 실황 ----
-        try:
-            n = fetch_ncst(nx, ny, key, nbase)
-            if "T1H" in n and "REH" in n:
-                obs_rows.append({
-                    "site": site["name"], "nx": nx, "ny": ny,
-                    "obs_dt": nbase.strftime("%Y-%m-%d %H:00"),
-                    "ta": n["T1H"], "rh": n["REH"],
-                    "at": apparent_temp(n["T1H"], n["REH"]),
-                })
-                print(f"  {site['name']}: 실황 {n['T1H']}℃ / {n['REH']}%")
-        except Exception as e:
-            print(f"  {site['name']}: 실황 실패 — {e}", file=sys.stderr)
+    print(f"  → 실황 {len(obs_rows)}지점 · 예보 {len(fcst_rows)}행 수집")
 
     if not fcst_rows and not obs_rows:
         # 전 지점 실패 = 기상청 API 장애일 가능성이 높다.
-        # 다음 회차(30분 뒤)에 같은 시각을 다시 시도하므로 데이터 손실은 제한적이다.
+        # 다음 회차가 같은 시각을 다시 시도하므로 데이터 손실은 제한적이다.
         print("⚠️ 수집된 데이터가 없습니다 — 기상청 API 응답 없음", file=sys.stderr)
         return 1
 

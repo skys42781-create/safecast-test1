@@ -35,7 +35,7 @@ jobs:
       - name: 수집 실행
         id: collect
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 8
         env:
           KMA_KEY: ${{ secrets.KMA_KEY }}
         run: python scripts/collect.py
