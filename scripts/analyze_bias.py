@@ -63,6 +63,11 @@ def load() -> pd.DataFrame:
 
     m = fc.merge(ob, left_on=["site", "target_dt"], right_on=["site", "obs_dt"],
                  suffixes=("_f", "_o"))
+    # 예보·실황 양쪽에 nx, ny가 있어 조인 시 nx_f/nx_o로 갈린다.
+    # 같은 격자이므로 하나로 정규화한다.
+    for c in ("nx", "ny"):
+        if c not in m.columns and f"{c}_f" in m.columns:
+            m[c] = m[f"{c}_f"]
     m["d_ta"] = m["ta_f"] - m["ta_o"]
     m["d_at"] = m["at_f"] - m["at_o"]
     m["hour"] = m["target_dt"].dt.hour
@@ -160,12 +165,18 @@ def learn_site_const(m: pd.DataFrame) -> pd.DataFrame:
       임의 좌표의 현장에도 정확히 매칭된다.
     """
     hot = m[(m["age_days"] <= WINDOW_DAYS) & (m["ta_o"] >= MIN_TA)]
-    if hot.empty or "nx" not in hot.columns:
+    if "nx" not in hot.columns or "ny" not in hot.columns:
+        print("[!] 격자 컬럼(nx, ny)이 없습니다. collect.py가 격자를 저장하는지 "
+              "확인하세요.")
+        return pd.DataFrame()
+    if hot.empty:
+        print("[!] 폭염기 조건을 만족하는 자료가 없습니다.")
         return pd.DataFrame()
 
     rows = []
     for (nx, ny), g in hot.groupby(["nx", "ny"]):
-        if len(g) < MIN_SAMPLES * 10:      # 상수는 표본을 넉넉히 요구한다
+        # 상수는 표본을 넉넉히 요구한다. 다만 지점당 수백 건이면 충분하다.
+        if len(g) < 300:
             continue
         med = float(g["d_at"].median())
         rows.append({
@@ -246,6 +257,9 @@ def main():
     print()
 
     sc = learn_site_const(m)
+    if sc.empty:
+        print("[!] 격자별 상수 편의를 만들지 못했습니다. "
+              "격자당 300건 이상이 필요합니다.")
     if not sc.empty:
         sc.to_csv(DATA / "site_bias.csv", index=False, encoding="utf-8")
         print("── 격자별 상수 편의 (예보에 더할 값) ──")
