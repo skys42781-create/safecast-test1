@@ -807,9 +807,17 @@ def main() -> None:
         # 관측소는 고도(HT + HT_TA)가 공개되어 보정식이 확정된다.
         # 현장 고도를 먼저 확보한다. 기준 지점 선정에도 쓰이기 때문이다.
         site_elev = None
+        elev_failed = False
         if use_lapse:
-            site_elev = (C.get_elevation(lat, lon) if auto_elev
-                         else float(manual_site_elev))
+            if auto_elev:
+                site_elev = C.get_elevation(lat, lon)
+                if site_elev is None:
+                    # 자동 조회가 막히면 보정이 통째로 빠진다.
+                    # 조용히 건너뛰지 말고 수동 입력값으로 대체하고 알린다.
+                    site_elev = float(manual_site_elev)
+                    elev_failed = True
+            else:
+                site_elev = float(manual_site_elev)
 
         ref = {"ok": False}
         if use_station and not demo and kma:
@@ -846,11 +854,19 @@ def main() -> None:
         note = f"📡 {stamp} 기준"
         if cur_src == "초단기예보" and ncst_dt:
             note += f" · 최종 관측 {ncst_dt:%H:%M} {obs_ta}℃ (체감 {obs_at}℃)"
-        st.caption(
-            note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
-            "철골·콘크리트면은 이보다 높을 수 있습니다."
-        )
+        # 기준이 관측소인지 격자인지에 따라 문구가 달라야 한다.
+        if ref.get("ok"):
+            st.caption(note + " · 인근 관측소 실측값이며 현장 실측이 아닙니다. "
+                       "관측소는 잔디·백엽상 환경이라, 철골·콘크리트면은 "
+                       "이보다 높을 수 있습니다.")
+        else:
+            st.caption(note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
+                       "철골·콘크리트면은 이보다 높을 수 있습니다.")
         S.render_source(ref) if use_station and not demo else None
+        if elev_failed:
+            st.warning(f"고도 자동 조회(Open-Elevation)에 실패해 수동 입력값 "
+                       f"{manual_site_elev}m를 사용했습니다. 사이드바 «고도 보정»에서 "
+                       f"현장 해발고도를 확인하세요.", icon="⚠️")
         _rname = (f"{ref['ta_src']['name']} ({ref['ta_src']['kind']})"
                   if ref.get("ok") else f"기상청 격자 ({nx}, {ny})")
         _rdist = ref["ta_src"]["dist"] if ref.get("ok") else None

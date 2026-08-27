@@ -357,7 +357,10 @@ def render_source(ref: dict) -> None:
             st.caption("거리와 고도차를 함께 고려합니다. 보정량이 클수록 "
                        "기온감률의 불확실성이 증폭되므로, 가깝기만 한 지점보다 "
                        "고도가 비슷한 지점이 유리할 수 있습니다.")
-            st.dataframe(pd.DataFrame(ref["candidates"]).rename(columns={
+            _c = pd.DataFrame(ref["candidates"])
+            _c["dist_km"] = _c["dist_km"].round(1)
+            _c["ref_elev"] = _c["ref_elev"].round(0).astype(int)
+            st.dataframe(_c.rename(columns={
                 "name": "지점", "dist_km": "거리(km)", "ref_elev": "기준고도(m)"}),
                 hide_index=True, use_container_width=True)
 
