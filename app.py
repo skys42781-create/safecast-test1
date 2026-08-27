@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 import re
-import time
+import time as _time   # datetime.time 과 이름이 겹쳐 별칭 사용
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -28,7 +28,9 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+import correction as C
 import records as R
+import stations as S
 import tbm as T
 
 KST = ZoneInfo("Asia/Seoul")
@@ -289,7 +291,7 @@ def api_get(url: str, params: dict) -> dict:
         except Exception as e:
             last = e
             if attempt < API_RETRY - 1:
-                time.sleep(API_WAIT)
+                _time.sleep(API_WAIT)
     raise RuntimeError(mask_secret(last))
 
 
@@ -699,6 +701,26 @@ def main() -> None:
                                 "35℃ 매시간 15분은 지침 권고이며, 법적 최소는 "
                                 "여전히 2시간마다 20분입니다.")
 
+        with st.expander("🏔️ 고도 보정"):
+            use_lapse = st.toggle("고도 보정 적용", value=True,
+                                  help="기준 관측소와 현장의 고도차를 월별 "
+                                       "기온감률로 보정합니다.")
+            use_station = st.toggle("관측소 실황 기준", value=True,
+                                    help="격자 예보 대신 인근 ASOS/AWS 실측값을 "
+                                         "기준으로 씁니다. 관측소는 고도가 명확해 "
+                                         "보정식이 정확해집니다.")
+            use_aws = st.toggle("AWS 기온 사용", value=True,
+                                help="AWS(510지점)가 ASOS(100지점)보다 촘촘합니다. "
+                                     "기온은 더 가까운 쪽, 습도는 ASOS를 씁니다.")
+            auto_elev = st.toggle("현장 고도 자동 조회", value=True,
+                                  help="Open-Elevation API. 실패 시 수동 입력.")
+            e1, e2 = st.columns(2)
+            manual_site_elev = e1.number_input("현장 고도(m)", 0, 2000, 50, 10,
+                                               disabled=auto_elev)
+            ref_elev_in = e2.number_input("기준 고도(m)", 0, 2000, 50, 10,
+                                          disabled=use_station,
+                                          help="관측소 기준을 끄면 직접 입력")
+
         with st.expander("🔧 현장 설정"):
             conservative = st.toggle("보수적 MAX 적용", value=True,
                                      help="끄면 블록 평균 기준. A/B 비교 시연용.")
@@ -781,6 +803,36 @@ def main() -> None:
                 cur_ta, cur_rh = float(last["ta"]), float(last["rh"])
                 cur_src, cur_dt = "초단기예보", last["datetime"].to_pydatetime()
 
+        # ---- 기준값 선정: 관측소 실황 > 격자 실황 ----
+        # 관측소는 고도(HT + HT_TA)가 공개되어 보정식이 확정된다.
+        # 현장 고도를 먼저 확보한다. 기준 지점 선정에도 쓰이기 때문이다.
+        site_elev = None
+        if use_lapse:
+            site_elev = (C.get_elevation(lat, lon) if auto_elev
+                         else float(manual_site_elev))
+
+        ref = {"ok": False}
+        if use_station and not demo and kma:
+            ref = S.pick_reference(kma, lat, lon,
+                                   ncst_dt.strftime("%Y%m%d%H%M") if ncst_dt
+                                   else now.strftime("%Y%m%d%H00"),
+                                   use_aws, site_elev)
+        if ref.get("ok") and ref.get("ta") is not None:
+            raw_ta = ref["ta"]
+            raw_rh = ref["rh"] if ref.get("rh") is not None else cur_rh
+            ref_elev = ref["ref_elev"]
+            cur_src = f"{ref['ta_src']['kind']} 실황"
+        else:
+            raw_ta, raw_rh = cur_ta, cur_rh
+            ref_elev = float(ref_elev_in)
+
+        raw_at = apparent_temp(raw_ta, raw_rh)
+
+        # ---- 고도 보정 ----
+        corr = C.apply(raw_ta, raw_rh, site_elev,
+                       ref_elev if use_lapse else None, now.month)
+        cur_ta, cur_rh = corr["ta"], corr["rh"]
+
         cur_at = apparent_temp(cur_ta, cur_rh)
         ct = classify(cur_at)
 
@@ -798,6 +850,13 @@ def main() -> None:
             note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
             "철골·콘크리트면은 이보다 높을 수 있습니다."
         )
+        S.render_source(ref) if use_station and not demo else None
+        _rname = (f"{ref['ta_src']['name']} ({ref['ta_src']['kind']})"
+                  if ref.get("ok") else f"기상청 격자 ({nx}, {ny})")
+        _rdist = ref["ta_src"]["dist"] if ref.get("ok") else None
+        C.render_panel(corr, raw_ta, raw_rh, raw_at, cur_at,
+                       site_elev, ref_elev if use_lapse else None,
+                       _rname, _rdist, now.month)
 
     today_df, tmr_df = fc[fc["day"] == today], fc[fc["day"] == tomorrow]
     day_max = float(today_df["at"].max()) if not today_df.empty else float(fc["at"].max())
@@ -950,6 +1009,10 @@ def main() -> None:
 
 ⚠️ 발표 전 고용노동부 최신 보도자료로 기준 재검증 필요 (매년 갱신).
 """)
+        st.divider()
+        C.render_basis()
+        st.divider()
+        S.render_basis()
         st.divider()
         T.render_basis()
 
