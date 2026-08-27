@@ -92,11 +92,13 @@ def load_stations(key: str, kind: str = "SFC") -> pd.DataFrame:
             v = list(r)
             stn = int(v[0]); lon = float(v[1]); lat = float(v[2])
             ht = float(v[4]); ht_ta = float(v[6])
-            # STN_CD(항공코드 'N' 등)가 STN_KO보다 앞에 온다.
-            # 한글이 포함된 토큰을 지점명으로 삼고, 없으면 인덱스로 접근한다.
-            name = next((x for x in v[9:] if _has_hangul(x)), None)
-            if name is None:
-                name = v[10] if len(v) > 10 else f"지점{stn}"
+            # 실제 응답 컬럼 순서 (help=1 헤더로 확인):
+            #   0 STN_ID  1 LON  2 LAT  3 STN_SP  4 HT  5 HT_PA  6 HT_TA
+            #   7 HT_WD  8 HT_RN  9 STN_AD  10 STN_KO  11 STN_EN  … 15+ LAW_ADDR
+            # LAW_ADDR도 한글이므로 '한글 검색'이 아니라 인덱스로 잡는다.
+            name = v[10] if len(v) > 10 else f"지점{stn}"
+            if not _has_hangul(name):
+                name = f"지점{stn}"
             if not (32 < lat < 40 and 124 < lon < 132):
                 continue
             if ht < -50 or ht > 2500:
@@ -176,43 +178,71 @@ def best_reference(stations: pd.DataFrame, lat: float, lon: float,
 # 실황
 # =====================================================================
 
+def _header_index(text: str, names: list[str]) -> dict[str, int]:
+    """help=1 응답의 주석 헤더에서 컬럼 위치를 찾는다.
+
+    [왜 인덱스를 하드코딩하지 않는가]
+      API 응답의 컬럼 순서는 문서와 다를 수 있고, 개편 시 조용히 바뀐다.
+      잘못된 열을 기온으로 읽으면 등급이 통째로 틀리므로,
+      헤더에서 이름으로 찾고 실패할 때만 기존 인덱스로 되돌아간다.
+    """
+    best = {}
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            continue
+        toks = line.lstrip("#").split()
+        hit = {n: toks.index(n) for n in names if n in toks}
+        if len(hit) > len(best):
+            best = hit
+    return best
+
+
+def _obs_from(text: str, fallback: dict[str, int]) -> dict | None:
+    """관측 응답 1행을 {ta, rh, ws, tm}으로."""
+    df = _parse_fixed(text)
+    if df.empty:
+        return None
+    v = list(df.iloc[0])
+    idx = _header_index(text, ["TA", "HM", "WS", "REH"])
+
+    def pick(name: str, fb: int | None):
+        i = idx.get(name, fb)
+        if i is None or i >= len(v):
+            return None
+        return _num(v[i])
+
+    ta = pick("TA", fallback.get("TA"))
+    rh = pick("HM", fallback.get("HM"))
+    if rh is None:
+        rh = pick("REH", None)
+    ws = pick("WS", fallback.get("WS"))
+    if ta is None:
+        return None
+    return {"ta": ta, "rh": rh, "ws": ws, "tm": v[0]}
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def asos_now(key: str, stn_id: int, tm: str) -> dict | None:
     """ASOS 매시 관측. tm은 YYYYMMDDHHMM(KST, 정시).
 
-    반환: {ta, rh, ws, tm} — 결측(-9, -99 등)은 None.
+    컬럼(문서 기준): TM STN WD WS GST_WD GST_WS GST_TM PA PS PT PR TA TD HM ...
+    실제 위치는 헤더에서 찾고, 못 찾으면 이 인덱스를 쓴다.
     """
     try:
         txt = _get(f"{TYP01}/kma_sfctm2.php",
-                   {"tm": tm, "stn": stn_id, "help": "0", "authKey": key})
-        df = _parse_fixed(txt)
-        if df.empty:
-            return None
-        v = list(df.iloc[0])
-        # TM STN WD WS GST_WD GST_WS GST_TM PA PS PT PR TA TD HM PV RN ...
-        ta = _num(v[11]); rh = _num(v[13]); ws = _num(v[3])
-        if ta is None:
-            return None
-        return {"ta": ta, "rh": rh, "ws": ws, "tm": v[0]}
+                   {"tm": tm, "stn": stn_id, "help": "1", "authKey": key})
+        return _obs_from(txt, {"TA": 11, "HM": 13, "WS": 3})
     except Exception:
         return None
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def aws_now(key: str, stn_id: int, tm: str) -> dict | None:
-    """AWS 매분 관측(정시값). 습도가 없는 지점이 많다."""
+    """AWS 매시 관측. 습도(HM)가 결측인 지점이 많다."""
     try:
         txt = _get(f"{TYP01}/awsh.php",
-                   {"tm": tm, "stn": stn_id, "help": "0", "authKey": key})
-        df = _parse_fixed(txt)
-        if df.empty:
-            return None
-        v = list(df.iloc[0])
-        ta = _num(v[2]) if len(v) > 2 else None
-        rh = _num(v[5]) if len(v) > 5 else None
-        if ta is None:
-            return None
-        return {"ta": ta, "rh": rh, "tm": v[0]}
+                   {"tm": tm, "stn": stn_id, "help": "1", "authKey": key})
+        return _obs_from(txt, {"TA": 2, "HM": 5, "WS": None})
     except Exception:
         return None
 
