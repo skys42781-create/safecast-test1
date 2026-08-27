@@ -862,7 +862,9 @@ def main() -> None:
         else:
             st.caption(note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
                        "철골·콘크리트면은 이보다 높을 수 있습니다.")
-        S.render_source(ref) if use_station and not demo else None
+        # 삼항연산자를 쓰면 결과값 None이 화면에 그대로 출력된다.
+        if use_station and not demo:
+            S.render_source(ref)
         if elev_failed:
             st.warning(f"고도 자동 조회(Open-Elevation)에 실패해 수동 입력값 "
                        f"{manual_site_elev}m를 사용했습니다. 사이드바 «고도 보정»에서 "
@@ -926,17 +928,31 @@ def main() -> None:
         st.session_state["_roster"] = roster
     day_tbm = T.build_tbm(roster, day_tier.code)
 
+    # ---- 격자별 예보 편의 보정 ----
+    # 수집 데이터로 학습한 상수를 예보에만 더한다.
+    # 현재값은 관측소 실측이므로 예보 오차가 없어 대상이 아니다.
+    fbias = C.forecast_bias(nx, ny) if not demo else {"applied": False,
+                                                     "correction": 0.0,
+                                                     "reason": "데모 모드"}
+    if fbias["applied"] and fbias["correction"]:
+        fc = fc.copy()
+        fc["at"] = (fc["at"] + fbias["correction"]).round(1)
+        today_df = fc[fc["day"] == today]
+        tmr_df = fc[fc["day"] == tomorrow]
+
     t1, t2, t6, t4, t7, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
          "⏰ 알람", "👷 TBM 타겟 명단", "📝 조치 기록", "📖 법적 근거"])
 
     with t1:
+        C.render_forecast_bias(fbias)
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
             render_day(today_df, today, conservative, lead, strict)
 
     with t2:
+        C.render_forecast_bias(fbias)
         if tmr_df.empty:
             st.warning("내일 예보 데이터가 없습니다.")
         else:

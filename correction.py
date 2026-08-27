@@ -25,9 +25,13 @@ Safecast — 지점 상세화 보정 (downscaling correction)
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
+import pandas as pd
 import requests
 import streamlit as st
+
+SITE_BIAS_CSV = Path(__file__).resolve().parent / "data" / "site_bias.csv"
 
 # =====================================================================
 # 월별 기온감률 (℃/m)
@@ -147,6 +151,51 @@ def apply(ta: float, rh: float, site_elev: float | None, ref_elev: float | None,
 
 
 # =====================================================================
+# 격자별 예보 편의 (수집 데이터로 학습)
+# =====================================================================
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_site_bias() -> pd.DataFrame:
+    """scripts/analyze_bias.py 가 만든 격자별 상수 편의표."""
+    try:
+        return pd.read_csv(SITE_BIAS_CSV)
+    except Exception:
+        return pd.DataFrame(columns=["nx", "ny", "site", "n", "correction"])
+
+
+def forecast_bias(nx: int, ny: int) -> dict:
+    """이 격자의 예보 편의. 학습된 값이 없으면 보정하지 않는다.
+
+    [왜 상수인가]
+      시간대별 편의는 2주 내에 평균 0.39도 변동해 학습 대상이 아니었다.
+      격자별 상수는 지형·토지피복이라는 물리적 원인이 있어 안정적이며,
+      롤링 검증에서 RMSE 11.8% 개선과 과소판정 감소(7.7%→6.6%)를 보였다.
+
+    [왜 실황이 아니라 예보에만 적용하는가]
+      이 편의는 '격자 예보 − 격자 실황'으로 학습한 값이다.
+      현재값은 관측소 실측을 쓰므로 예보 오차가 존재하지 않는다.
+    """
+    t = load_site_bias()
+    if t.empty:
+        return {"applied": False, "correction": 0.0, "reason": "학습된 편의 없음"}
+    hit = t[(t["nx"] == nx) & (t["ny"] == ny)]
+    if hit.empty:
+        return {"applied": False, "correction": 0.0,
+                "reason": "이 격자의 수집 데이터가 없어 보정하지 않음"}
+    r = hit.iloc[0]
+    return {"applied": True, "correction": float(r["correction"]),
+            "n": int(r["n"]), "site": str(r["site"]),
+            "reason": f"수집 {int(r['n']):,}건에서 학습한 격자 편의"}
+
+
+def render_forecast_bias(fb: dict) -> None:
+    if not fb.get("applied"):
+        st.caption(f"⚪ 예보 편의 보정 미적용 — {fb['reason']}")
+        return
+    st.caption(f"📊 예보 편의 보정 {fb['correction']:+.2f}℃ · {fb['reason']}")
+
+
+# =====================================================================
 # UI
 # =====================================================================
 
@@ -222,6 +271,26 @@ def render_basis() -> None:
 체감온도는 기온과 습도의 함수이므로, 기온 보정 시 이슬점을 보존한 채
 상대습도를 재계산해야 합니다. 이를 생략하면 체감온도를 약 1℃ 과소평가하며
 그 방향이 항상 '실제보다 시원함'이라 안전 관점에서 위험합니다.
+
+**격자별 예보 편의 — 실측으로 검증한 결과**
+
+수집한 예보·실황 쌍으로 여러 보정 방법을 롤링 검증한 결과는 다음과 같습니다.
+
+| 방법 | RMSE | 등급정확도 | 과소판정 |
+|---|---|---|---|
+| 보정 없음 | 1.074 | 82.1% | 7.7% |
+| 전국 시간대별 | 1.055 | 83.8% | 9.7% |
+| **격자별 상수** | **0.947** | **85.0%** | **6.6%** |
+| 격자별 시간대 | 0.908 | 85.4% | 10.2% |
+
+**격자별 상수를 채택**했습니다. RMSE가 가장 낮은 것은 격자별 시간대였으나,
+**과소판정(실제보다 낮은 등급으로 판정)이 7.7%에서 10.2%로 늘어**
+안전 관점에서 부적합합니다. 과소판정은 휴식 미부여로 이어지므로
+과대판정보다 위험합니다.
+
+시간대별 편의를 배제한 이유는 **안정성**입니다. 2주 내에 시간대별 편의가
+평균 0.39℃ 변동했고 부호가 바뀌는 시각도 있었습니다. 이는 예보 모델의
+구조적 편의가 아니라 해당 기간의 기상 패턴이며, 학습해도 다음 기간에 맞지 않습니다.
 
 **한계**
 
