@@ -30,6 +30,7 @@ import streamlit as st
 
 import correction as C
 import records as R
+import snapshot as SNAP
 import stations as S
 import tbm as T
 
@@ -270,9 +271,14 @@ FCST_BASE_HOURS = [2, 5, 8, 11, 14, 17, 20, 23]
 #   ⚠️ 예외 메시지에는 요청 URL이 통째로 들어가고, 거기에 인증키가 포함된다.
 #      공개 배포된 앱에서 그대로 표시하면 키가 노출되므로 반드시 가린다.
 # ---------------------------------------------------------------------
-API_TIMEOUT = (10, 12)   # (연결, 응답)
+# ⚠️ 연결 타임아웃을 짧게 잡으면 안 된다.
+#    기상청 typ02(동네예보)는 해외 IP에서 TCP 연결 수립이 20초 이상 걸리는
+#    구간이 실제로 관측된다. GitHub Actions 수집기는 연결 20초로 성공하는 반면
+#    앱이 10초로 끊어 ConnectTimeout이 나던 사례가 있었다.
+#    → 연결은 넉넉히 기다리고, 응답 대기는 짧게 끊는다.
+API_TIMEOUT = (25, 20)   # (연결, 응답)
 API_RETRY = 3
-API_WAIT = 2
+API_WAIT = 5
 
 
 def mask_secret(msg: str) -> str:
@@ -759,34 +765,87 @@ def main() -> None:
     today, tomorrow = now.date(), now.date() + timedelta(days=1)
 
     # ---------- 데이터 ----------
+    # 우선순위: ① 수집 스냅샷 → ② 기상청 라이브 → ③ 데모
+    #
+    #   ① GitHub Actions가 매시간 수집해 레포에 커밋한 CSV.
+    #      기상청 서버 상태와 무관하므로 시연 중 장애에 영향받지 않는다.
+    #   ② 스냅샷에 해당 격자가 없을 때만 직접 호출한다.
+    #      (collect.py는 SITES에 정의된 격자만 수집한다)
+    #   ③ 둘 다 실패하면 데모. 이때는 화면에 명확히 표기해야 한다.
+    fc_is_demo = False
+    fc_meta, obs_meta = {}, {}
+
     if demo:
         fc = enrich(demo_forecast(today, 2, peak, demo_rh))
         ncst, ncst_dt, ufc, src = None, None, None, "🟡 데모 데이터"
+        fc_is_demo = True
     else:
-        try:
-            bd, bt = latest_fcst_base(now)
-            fc = enrich(fetch_forecast(nx, ny, kma, bd, bt))
-            src = f"🟢 단기예보 {bt[:2]}시 발표"
-        except Exception as e:
-            st.error("기상청 API에 연결하지 못했습니다 → 데모 데이터로 대체합니다. "
-                     "잠시 후 새로고침해 주세요.", icon="⚠️")
-            with st.expander("오류 상세"):
-                st.code(mask_secret(e)[:500], language=None)
-            fc, src = enrich(demo_forecast(today, 2, 34.0)), "🔴 API 실패"
-        try:
-            nb, nt = latest_ncst_base(now)
-            ncst = fetch_now(nx, ny, kma, nb, nt)
-            ncst_dt = datetime.strptime(nb + nt, "%Y%m%d%H%M")
-        except Exception:
-            ncst, ncst_dt = None, None
-        try:
-            ub, ut = latest_ultra_base(now)
-            ufc = fetch_ultra_fcst(nx, ny, kma, ub, ut)
-        except Exception:
-            ufc = None
+        fc, src = None, ""
+
+        # ---- ① 스냅샷 ----
+        snap, fc_meta = SNAP.forecast(nx, ny, now)
+        if snap is not None:
+            fc = enrich(snap)
+            src = f"🗄️ 수집 예보 {fc_meta['base_dt']:%H시} 발표"
+
+        # ---- ② 라이브 ----
+        if fc is None and kma:
+            try:
+                bd, bt = latest_fcst_base(now)
+                fc = enrich(fetch_forecast(nx, ny, kma, bd, bt))
+                src = f"🟢 단기예보 {bt[:2]}시 발표"
+            except Exception as e:
+                st.session_state["_api_err"] = mask_secret(e)[:500]
+
+        # ---- ③ 데모 ----
+        if fc is None:
+            st.error("기상청 예보를 가져오지 못했습니다 → **데모 데이터**로 표시합니다. "
+                     "실제 작업 통제 판정에 사용하지 마세요.", icon="⚠️")
+            if st.session_state.get("_api_err"):
+                with st.expander("오류 상세"):
+                    st.code(st.session_state["_api_err"], language=None)
+            if fc_meta.get("reason"):
+                st.caption(f"스냅샷 미사용 사유 — {fc_meta['reason']}")
+            fc = enrich(demo_forecast(today, 2, 34.0))
+            src = "🔴 데모 (수집·API 모두 실패)"
+            fc_is_demo = True
+
+        # ---- 실황 · 초단기예보 ----
+        # 실황도 라이브를 먼저 시도하고, 실패하면 스냅샷으로 메운다.
+        ncst, ncst_dt = None, None
+        if kma:
+            try:
+                nb, nt = latest_ncst_base(now)
+                ncst = fetch_now(nx, ny, kma, nb, nt)
+                ncst_dt = datetime.strptime(nb + nt, "%Y%m%d%H%M")
+            except Exception:
+                ncst, ncst_dt = None, None
+        if ncst is None:
+            ncst, obs_meta = SNAP.observation(nx, ny, now)
+            if ncst is not None:
+                ncst_dt = obs_meta["obs_dt"]
+
+        # 초단기예보는 '실황과 현재 사이의 공백'을 메우는 보조 데이터다.
+        # 없어도 동작에 지장이 없으므로 실패해도 조용히 넘어간다.
+        ufc = None
+        if kma:
+            try:
+                ub, ut = latest_ultra_base(now)
+                ufc = fetch_ultra_fcst(nx, ny, kma, ub, ut)
+            except Exception:
+                ufc = None
 
     fc = fc[fc["day"].isin([today, tomorrow])]
+    if fc.empty:
+        # 예보 구간이 통째로 비면 이후 모든 계산이 무의미하다.
+        st.error("표시할 예보 구간이 없습니다. 사이드바에서 데모 모드로 전환해 주세요.",
+                 icon="⚠️")
+        st.stop()
+
     st.success(f"📍 **{name}** · 격자 (nx={nx}, ny={ny}) · {src}")
+    SNAP.render_banner(fc_meta, "예보")
+    if obs_meta.get("ok"):
+        SNAP.render_banner(obs_meta, "실황")
 
     # ---------- 현재 상황 (관측 + 현재시각 추정) ----------
     if ncst and "T1H" in ncst and "REH" in ncst:
@@ -810,7 +869,10 @@ def main() -> None:
         elev_failed = False
         if use_lapse:
             if auto_elev:
-                site_elev = C.get_elevation(lat, lon)
+                try:
+                    site_elev = C.get_elevation(lat, lon)
+                except Exception:
+                    site_elev = None
                 if site_elev is None:
                     # 자동 조회가 막히면 보정이 통째로 빠진다.
                     # 조용히 건너뛰지 말고 수동 입력값으로 대체하고 알린다.
@@ -819,12 +881,17 @@ def main() -> None:
             else:
                 site_elev = float(manual_site_elev)
 
+        # 관측소 조회는 별도 API(typ01)를 쓴다. 여기서 예외가 나면
+        # 화면 전체가 죽으므로, 실패해도 격자 기준으로 계속 진행한다.
         ref = {"ok": False}
         if use_station and not demo and kma:
-            ref = S.pick_reference(kma, lat, lon,
-                                   ncst_dt.strftime("%Y%m%d%H%M") if ncst_dt
-                                   else now.strftime("%Y%m%d%H00"),
-                                   use_aws, site_elev)
+            try:
+                ref = S.pick_reference(kma, lat, lon,
+                                       ncst_dt.strftime("%Y%m%d%H%M") if ncst_dt
+                                       else now.strftime("%Y%m%d%H00"),
+                                       use_aws, site_elev)
+            except Exception:
+                ref = {"ok": False}
         if ref.get("ok") and ref.get("ta") is not None:
             raw_ta = ref["ta"]
             raw_rh = ref["rh"] if ref.get("rh") is not None else cur_rh
@@ -931,9 +998,15 @@ def main() -> None:
     # ---- 격자별 예보 편의 보정 ----
     # 수집 데이터로 학습한 상수를 예보에만 더한다.
     # 현재값은 관측소 실측이므로 예보 오차가 없어 대상이 아니다.
-    fbias = C.forecast_bias(nx, ny) if not demo else {"applied": False,
-                                                     "correction": 0.0,
-                                                     "reason": "데모 모드"}
+    _nobias = {"applied": False, "correction": 0.0, "reason": "데모 모드"}
+    if demo or fc_is_demo:
+        fbias = _nobias
+    else:
+        try:
+            fbias = C.forecast_bias(nx, ny)
+        except Exception as e:
+            fbias = {"applied": False, "correction": 0.0,
+                     "reason": f"편의표 로드 실패 ({type(e).__name__})"}
     if fbias["applied"] and fbias["correction"]:
         fc = fc.copy()
         fc["at"] = (fc["at"] + fbias["correction"]).round(1)
@@ -1008,8 +1081,16 @@ def main() -> None:
     with t7:
         _b = build_blocks(today_df, today, conservative) if not today_df.empty \
             else pd.DataFrame()
-        _src = ("현장 실측" if False else
-                ("기상청 격자(5km) 예보" if demo is False else "데모 데이터"))
+        # 기록·보관은 법적 의무(제562조제2항제3호)다.
+        # 데모 데이터가 실측인 것처럼 기록되면 안 되므로 실제 출처를 그대로 쓴다.
+        if fc_is_demo:
+            _src = "⚠️ 데모 데이터 (법적 기록 근거 없음)"
+        elif fc_meta.get("ok"):
+            _src = f"기상청 단기예보 (수집분 {fc_meta['base_dt']:%m/%d %H시} 발표)"
+        else:
+            _src = "기상청 격자(5km) 단기예보"
+        if fbias.get("applied") and fbias.get("correction"):
+            _src += f" · 격자 편의보정 {fbias['correction']:+.1f}℃"
         R.render(_b, today_df, today, name, _src,
                  int(roster["옥외작업"].sum()) if not roster.empty else 0,
                  lambda b: rest_slots(b, strict), tier_by_code, classify)
@@ -1050,4 +1131,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # 어떤 경로로든 예외가 새어나가면 사용자에게는 빨간 트레이스백만 보인다.
+    # 현장에서 쓰는 도구이므로 반드시 사람이 읽을 수 있는 안내로 바꾼다.
+    try:
+        main()
+    except Exception as _e:                       # noqa: BLE001
+        st.error("일시적인 오류가 발생했습니다. 잠시 후 새로고침해 주세요.\n\n"
+                 "계속되면 사이드바에서 «데모 모드»를 켜고 시연을 진행하세요.",
+                 icon="⚠️")
+        with st.expander("오류 상세 (관리자 확인용)"):
+            st.code(mask_secret(_e)[:1000], language=None)
