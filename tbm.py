@@ -177,16 +177,32 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
     if sv is None or sv.empty:
         return pd.DataFrame(columns=ROSTER_COLUMNS)
 
+    # DataFrame.get()은 컬럼이 없으면 기본값을 그대로 돌려준다.
+    # 즉 문자열이 반환되어 .astype() 같은 Series 메서드가 실패한다.
+    # 등록 명부는 앱 버전에 따라 컬럼 구성이 달라질 수 있으므로
+    # 항상 Series를 보장하는 헬퍼로 접근한다.
+    n = len(sv)
+
+    def col(name: str, default="") -> pd.Series:
+        if name in sv.columns:
+            return sv[name].fillna(default).astype(str).str.strip()
+        return pd.Series([str(default)] * n, index=sv.index)
+
+    def num(name: str, default) -> pd.Series:
+        if name in sv.columns:
+            return pd.to_numeric(sv[name], errors="coerce").fillna(default)
+        return pd.Series([default] * n, index=sv.index)
+
+    trade = col("공종", "미상").replace("", "미상")
     out = pd.DataFrame({
-        "성명": sv.get("이름", pd.Series(dtype=str)).astype(str).str.strip(),
-        "생년월일": sv.get("생년월일", "").astype(str),
-        "소속": sv.get("소속", ""),
-        "작업구역": sv.get("작업구역", ""),
-        "공종": sv.get("공종", "미상").fillna("미상").replace("", "미상"),
-        "연령": pd.to_numeric(sv.get("연령"), errors="coerce").fillna(0).astype(int),
-        "투입일차": pd.to_numeric(sv.get("투입일차"), errors="coerce")
-                     .fillna(999).astype(int),
-        "복귀자": sv.get("복귀자", "").astype(str).str.strip() == "예",
+        "성명": col("이름"),
+        "생년월일": col("생년월일"),
+        "소속": col("소속"),
+        "작업구역": col("작업구역"),
+        "공종": trade,
+        "연령": num("연령", 0).astype(int),
+        "투입일차": num("투입일차", 999).astype(int),
+        "복귀자": col("복귀자") == "예",
     })
     for c in ["만성질환", "온열질환기왕력", "약물복용",
               "알코올의존", "일시적건강저하"]:
