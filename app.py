@@ -10,7 +10,8 @@ Safecast — 스마트 건설 폭염 관제 대시보드
 
 .streamlit/secrets.toml
     KAKAO_KEY = "카카오 REST API 키"
-    KMA_KEY   = "공공데이터포털 기상청 일반인증키(Decoding)"
+    KMA_KEY     = "공공데이터포털 기상청 일반인증키(Decoding)"
+    KMA_HUB_KEY = "기상청 API허브 authKey (선택 — 이중화용)"
 """
 
 from __future__ import annotations
@@ -42,14 +43,33 @@ KST = ZoneInfo("Asia/Seoul")
 #   False → 공공데이터포털 (data.go.kr).        인증 파라미터: serviceKey (Decoding 키)
 # 두 곳은 응답 형식이 같고 인증 방식만 다르다.
 # ---------------------------------------------------------------------
-USE_APIHUB = True
+# ---------------------------------------------------------------------
+# 기상청 API 창구
+#
+#   같은 데이터를 두 곳에서 제공한다. 서버·IP·인프라가 서로 다르므로
+#   한쪽이 막혀도 다른 쪽으로 우회할 수 있다.
+#
+#   Streamlit Cloud에서 apihub.kma.go.kr 연결이 간헐적으로 ConnectTimeout이
+#   나는 것을 확인했다(같은 시각 GitHub Actions·국내 브라우저는 정상).
+#   따라서 창구를 하나로 고정하지 않고 순서대로 시도한다.
+#
+#   키는 창구마다 다르다. secrets에 둘 다 넣어두면 자동으로 골라 쓴다.
+#     KMA_KEY      공공데이터포털 일반인증키(Decoding) — serviceKey
+#     KMA_HUB_KEY  기상청 API허브 authKey
+#   하나만 있으면 그 창구만 쓴다.
+# ---------------------------------------------------------------------
+ENDPOINTS = [
+    {"name": "공공데이터포털",
+     "base": "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0",
+     "key_param": "serviceKey", "secret": "KMA_KEY"},
+    {"name": "기상청 API허브",
+     "base": "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0",
+     "key_param": "authKey", "secret": "KMA_HUB_KEY"},
+]
 
-if USE_APIHUB:
-    BASE_URL = "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0"
-    KEY_PARAM = "authKey"
-else:
-    BASE_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
-    KEY_PARAM = "serviceKey"
+# 하위 호환 — 아직 이 상수를 참조하는 곳이 있을 수 있다.
+BASE_URL = ENDPOINTS[0]["base"]
+KEY_PARAM = ENDPOINTS[0]["key_param"]
 
 
 # =====================================================================
@@ -286,19 +306,60 @@ def mask_secret(msg: str) -> str:
     return re.sub(r"((?:authKey|serviceKey)=)[^&\s\)\']+", r"\1***", str(msg))
 
 
-def api_get(url: str, params: dict) -> dict:
-    """재시도 포함 GET. 기상청 API는 간헐적으로 연결이 지연된다."""
-    last = None
-    for attempt in range(API_RETRY):
+def _keys() -> list[dict]:
+    """secrets에 들어 있는 창구만 골라 순서대로 돌려준다."""
+    out = []
+    for ep in ENDPOINTS:
         try:
-            r = requests.get(url, params=params, timeout=API_TIMEOUT)
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            last = e
-            if attempt < API_RETRY - 1:
-                _time.sleep(API_WAIT)
-    raise RuntimeError(mask_secret(last))
+            k = str(st.secrets.get(ep["secret"], "") or "").strip()
+        except Exception:
+            k = ""
+        if k:
+            out.append({**ep, "key": k})
+    return out
+
+
+def call_kma(path: str, params: dict) -> dict:
+    """단기예보 계열 호출. 창구를 순서대로 시도한다.
+
+    [왜 창구를 여럿 두는가]
+      Streamlit Cloud에서 apihub.kma.go.kr 연결이 간헐적으로 ConnectTimeout이
+      난다. 같은 시각 GitHub Actions와 국내 브라우저에서는 정상이므로
+      기상청 장애가 아니라 배포 환경의 네트워크 문제다.
+      공공데이터포털은 서버·IP가 달라 우회로가 된다.
+
+      한 창구가 실패하면 즉시 다음으로 넘어간다. 재시도는 창구 안에서 한 번만
+      하고, 오래 붙들지 않는다. 어차피 다음 창구가 있기 때문이다.
+    """
+    eps = _keys()
+    if not eps:
+        raise RuntimeError("사용 가능한 기상청 인증키가 없습니다 "
+                           "(secrets의 KMA_KEY / KMA_HUB_KEY 확인)")
+    errs = []
+    for ep in eps:
+        for attempt in range(API_RETRY):
+            try:
+                r = requests.get(f"{ep['base']}/{path}",
+                                 params={ep["key_param"]: ep["key"], **params},
+                                 timeout=API_TIMEOUT)
+                r.raise_for_status()
+                js = r.json()
+                # 정상 응답이면 어느 창구를 썼는지 남긴다 (화면 표기용)
+                st.session_state["_kma_via"] = ep["name"]
+                return js
+            except Exception as e:
+                if attempt == API_RETRY - 1:
+                    errs.append(f"{ep['name']}: {type(e).__name__}")
+                else:
+                    _time.sleep(API_WAIT)
+    raise RuntimeError(mask_secret(" / ".join(errs)))
+
+
+def api_get(url: str, params: dict) -> dict:
+    """하위 호환 래퍼. 새 코드는 call_kma()를 쓴다."""
+    path = url.rsplit("/", 1)[-1]
+    p = {k: v for k, v in params.items() if k not in ("authKey", "serviceKey")}
+    return call_kma(path, p)
 
 
 def now_kst() -> datetime:
@@ -332,8 +393,8 @@ def latest_ultra_base(now: datetime) -> tuple[str, str]:
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_ultra_fcst(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame:
     """초단기예보 → [datetime, ta, rh]. 실황이 아직 안 나온 현재 시각을 메운다."""
-    js = api_get(f"{BASE_URL}/getUltraSrtFcst", {
-        KEY_PARAM: key, "pageNo": 1, "numOfRows": 300, "dataType": "JSON",
+    js = call_kma("getUltraSrtFcst", {
+        "pageNo": 1, "numOfRows": 300, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
     items = js["response"]["body"]["items"]["item"]
 
@@ -354,8 +415,8 @@ def fetch_ultra_fcst(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFra
 @st.cache_data(ttl=600, show_spinner="기상청 실황 수신 중…")
 def fetch_now(nx: int, ny: int, key: str, bd: str, bt: str) -> dict:
     """초단기실황 → {T1H: 기온, REH: 습도, ...}"""
-    js = api_get(f"{BASE_URL}/getUltraSrtNcst", {
-        KEY_PARAM: key, "pageNo": 1, "numOfRows": 100, "dataType": "JSON",
+    js = call_kma("getUltraSrtNcst", {
+        "pageNo": 1, "numOfRows": 100, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
     items = js["response"]["body"]["items"]["item"]
     return {i["category"]: float(i["obsrValue"]) for i in items}
@@ -367,8 +428,8 @@ def fetch_forecast(nx: int, ny: int, key: str, bd: str, bt: str) -> pd.DataFrame
 
     ⚠️ numOfRows는 1000 이상. 300이면 뒤쪽 시간대가 잘려 0℃로 표시된다.
     """
-    js = api_get(f"{BASE_URL}/getVilageFcst", {
-        KEY_PARAM: key, "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
+    js = call_kma("getVilageFcst", {
+        "pageNo": 1, "numOfRows": 1000, "dataType": "JSON",
         "base_date": bd, "base_time": bt, "nx": nx, "ny": ny})
     items = js["response"]["body"]["items"]["item"]
 
@@ -795,7 +856,8 @@ def main() -> None:
             try:
                 bd, bt = latest_fcst_base(now)
                 fc = enrich(fetch_forecast(nx, ny, kma, bd, bt))
-                src = f"🟢 단기예보 {bt[:2]}시 발표"
+                via = st.session_state.get("_kma_via", "")
+                src = f"🟢 단기예보 {bt[:2]}시 발표" + (f" · {via}" if via else "")
             except Exception as e:
                 st.session_state["_api_err"] = mask_secret(e)[:500]
 
