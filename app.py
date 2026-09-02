@@ -845,14 +845,11 @@ def main() -> None:
     else:
         fc, src = None, ""
 
-        # ---- ① 스냅샷 ----
-        snap, fc_meta = SNAP.forecast(nx, ny, now)
-        if snap is not None:
-            fc = enrich(snap)
-            src = f"🗄️ 수집 예보 {fc_meta['base_dt']:%H시} 발표"
-
-        # ---- ② 라이브 ----
-        if fc is None and kma:
+        # ---- ① 라이브 ----
+        # 라이브를 먼저 시도한다. 스냅샷을 앞에 두면 항상 스냅샷이 걸려
+        # API 창구가 실제로 살아 있는지 확인할 기회가 사라지고,
+        # 최대 30분 낡은 값을 쓰게 된다.
+        if kma:
             try:
                 bd, bt = latest_fcst_base(now)
                 fc = enrich(fetch_forecast(nx, ny, kma, bd, bt))
@@ -860,6 +857,14 @@ def main() -> None:
                 src = f"🟢 단기예보 {bt[:2]}시 발표" + (f" · {via}" if via else "")
             except Exception as e:
                 st.session_state["_api_err"] = mask_secret(e)[:500]
+
+        # ---- ② 스냅샷 ----
+        fc_meta = {}
+        if fc is None:
+            snap, fc_meta = SNAP.forecast(nx, ny, now)
+            if snap is not None:
+                fc = enrich(snap)
+                src = f"🗄️ 수집 예보 {fc_meta['base_dt']:%H시} 발표"
 
         # ---- ③ 데모 ----
         if fc is None:

@@ -25,6 +25,7 @@ Safecast — 지점 상세화 보정 (downscaling correction)
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -89,15 +90,32 @@ def correct_ta_rh(ta: float, rh: float, delta_t: float) -> tuple[float, float]:
 # 고도
 # =====================================================================
 
+# 외부 무료 서비스라 응답이 없을 때가 있다. 한 번 실패하면 잠시 건너뛴다.
+ELEV_TIMEOUT = (4, 6)
+ELEV_COOLDOWN_SEC = 600
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_elevation(lat: float, lon: float) -> float | None:
-    """좌표 → 해발고도(m). 실패하면 None (호출부에서 수동 입력으로 대체)."""
+    """좌표 → 해발고도(m). 실패하면 None (호출부에서 수동 입력으로 대체).
+
+    [왜 쿨다운이 필요한가]
+      Open-Elevation은 무료 공개 서비스라 종종 응답하지 않는다.
+      화면을 조작할 때마다 매번 타임아웃까지 기다리면 앱이 느려진다.
+    """
+    t = st.session_state.get("_elev_down_at")
+    if t and (time.time() - t) < ELEV_COOLDOWN_SEC:
+        return None
     try:
         r = requests.get(OPEN_ELEVATION,
-                         params={"locations": f"{lat},{lon}"}, timeout=8)
+                         params={"locations": f"{lat},{lon}"},
+                         timeout=ELEV_TIMEOUT)
         r.raise_for_status()
-        return float(r.json()["results"][0]["elevation"])
+        v = float(r.json()["results"][0]["elevation"])
+        st.session_state.pop("_elev_down_at", None)
+        return v
     except Exception:
+        st.session_state["_elev_down_at"] = time.time()
         return None
 
 
