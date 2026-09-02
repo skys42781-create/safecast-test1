@@ -681,9 +681,11 @@ def main() -> None:
                 is_admin = True
             else:
                 pw = st.text_input("관리자 비밀번호", type="password")
-                is_admin = (pw == admin_pw)
+                # secrets나 입력값 끝에 공백·줄바꿈이 섞이면 조용히 실패한다.
+                is_admin = bool(pw) and pw.strip() == str(admin_pw).strip()
                 if pw and not is_admin:
                     st.error("비밀번호가 일치하지 않습니다.")
+        admin_locked = mode.startswith("🛡️") and not is_admin
         st.divider()
 
         place = st.text_input("현장 위치", placeholder="예: 국민대학교")
@@ -950,6 +952,17 @@ def main() -> None:
     # ---------- 근로자 모드 ----------
     # 지침은 자각증상 점검표를 '근로자 스스로' 체크하도록 정한다.
     # 근로자에게는 남의 건강정보를 일절 보여주지 않는다.
+    if admin_locked:
+        # 관리자 모드를 골랐는데 인증 전이면, 근로자 화면으로 흘려보내지 않는다.
+        # 그러면 "관리자 모드가 안 된다"로 보여 원인을 찾기 어렵다.
+        st.warning("🔒 **관리자 인증이 필요합니다.** "
+                   "사이드바에서 관리자 비밀번호를 입력하세요.", icon="🔒")
+        st.caption("비밀번호는 Streamlit Cloud → Manage app → Settings → Secrets 의 "
+                   "`ADMIN_PW` 값입니다. 값 앞뒤 공백·따옴표가 섞이지 않았는지 "
+                   "확인하세요.")
+        st.caption("근로자용 화면을 보시려면 사이드바에서 «👷 근로자»를 선택하세요.")
+        st.stop()
+
     if not is_admin:
         st.markdown(
             f"""<div style="background:{day_tier.color};color:#fff;padding:18px;

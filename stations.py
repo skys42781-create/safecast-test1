@@ -25,8 +25,8 @@ Safecast — 지상관측 지점 연동 (ASOS / AWS)
 
 from __future__ import annotations
 
-import io
 import math
+import time
 
 import pandas as pd
 import requests
@@ -51,10 +51,34 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 
-def _get(url: str, params: dict, timeout=(10, 15)) -> str:
-    r = requests.get(url, params=params, timeout=timeout)
-    r.raise_for_status()
-    return r.text
+# 연결이 막힌 환경에서는 호출 하나하나가 타임아웃까지 기다린다.
+# 지점목록 2회 + 실황 최대 6회면 화면이 수 분간 멈추므로 짧게 끊는다.
+CONNECT_TIMEOUT = 6
+READ_TIMEOUT = 10
+
+# 한 번 실패하면 이 시간 동안은 아예 시도하지 않는다.
+# 이미 막힌 걸 매 조작마다 다시 두드리면 앱이 계속 느려진다.
+COOLDOWN_SEC = 300
+
+
+def _down() -> bool:
+    """직전 실패로부터 아직 쿨다운 중인가."""
+    t = st.session_state.get("_kma_down_at")
+    return bool(t and (time.time() - t) < COOLDOWN_SEC)
+
+
+def _get(url: str, params: dict,
+         timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)) -> str:
+    if _down():
+        raise RuntimeError("직전 호출이 실패해 잠시 건너뜁니다")
+    try:
+        r = requests.get(url, params=params, timeout=timeout)
+        r.raise_for_status()
+        st.session_state.pop("_kma_down_at", None)
+        return r.text
+    except Exception:
+        st.session_state["_kma_down_at"] = time.time()
+        raise
 
 
 def _parse_fixed(text: str) -> pd.DataFrame:
@@ -298,7 +322,9 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
                 break
 
     if a_hit is None and w_hit is None:
-        res["note"] = "인근 관측소 실황을 가져오지 못했습니다."
+        res["note"] = ("인근 관측소 실황을 가져오지 못했습니다. "
+                       "기상청 연결이 불안정하면 격자 실황·수집 스냅샷으로 "
+                       "대체됩니다.")
         return res
 
     # ---- 기온: 더 가까운 쪽 ----
