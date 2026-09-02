@@ -179,6 +179,7 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.DataFrame({
         "성명": sv.get("이름", pd.Series(dtype=str)).astype(str).str.strip(),
+        "생년월일": sv.get("생년월일", "").astype(str),
         "소속": sv.get("소속", ""),
         "작업구역": sv.get("작업구역", ""),
         "공종": sv.get("공종", "미상").fillna("미상").replace("", "미상"),
@@ -193,7 +194,9 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
     out["옥외작업"] = True
 
     # 같은 사람이 여러 번 등록했으면 최근 것만.
-    out = out[out["성명"] != ""].drop_duplicates(subset="성명", keep="last")
+    # 동명이인이 있으므로 성명만으로 중복 제거하면 한 사람이 사라진다.
+    key = ["성명", "생년월일"] if "생년월일" in out.columns else ["성명"]
+    out = out[out["성명"] != ""].drop_duplicates(subset=key, keep="last")
     return out.reset_index(drop=True)
 
 

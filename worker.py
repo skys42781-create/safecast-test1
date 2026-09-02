@@ -40,9 +40,10 @@ API = "https://api.github.com"
 SURVEY_PATH = "data/worker_survey.csv"
 REPORT_PATH = "data/worker_reports.csv"
 
-SURVEY_COLS = ["등록시각", "이름", "소속", "작업구역", "공종",
+SURVEY_COLS = ["등록시각", "이름", "생년월일", "소속", "작업구역", "공종",
                "연령", "투입일차", "복귀자"]
-REPORT_COLS = ["시각", "이름", "소속", "작업구역", "증상개수", "처리상태"]
+REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
+               "증상개수", "처리상태"]
 
 STATUS = ["미확인", "확인함", "조치완료"]
 
@@ -170,22 +171,54 @@ def load_survey() -> pd.DataFrame:
     return df
 
 
-def find_worker(name: str) -> dict | None:
-    """이름으로 기존 등록을 찾는다. 같은 이름이 여럿이면 최근 것."""
+def age_from(birth: str) -> int:
+    """생년월일(YYYYMMDD) → 만 나이."""
+    try:
+        b = datetime.strptime(str(birth).strip(), "%Y%m%d")
+    except ValueError:
+        return 0
+    t = datetime.now()
+    return t.year - b.year - ((t.month, t.day) < (b.month, b.day))
+
+
+def valid_birth(birth: str) -> bool:
+    """입력된 생년월일이 쓸 수 있는 값인가.
+
+    strptime("%Y%m%d")는 7자리(예: 1970031)도 받아들이므로
+    길이를 따로 검사해야 오입력이 걸러진다.
+    """
+    b = str(birth).strip()
+    if len(b) != 8 or not b.isdigit():
+        return False
+    a = age_from(b)
+    return 15 <= a <= 95
+
+
+def find_worker(name: str, birth: str) -> dict | None:
+    """이름 + 생년월일로 찾는다.
+
+    [왜 이름만으로는 안 되는가]
+      건설현장 60명 규모면 동명이인이 나온다. 이름만으로 찾으면
+      다른 사람의 등록 정보를 자기 것으로 쓰게 되고, 그 사람 이름으로
+      증상이 신고된다. 엉뚱한 사람이 조치 대상이 되므로 안전 문제다.
+    """
     df = load_survey()
-    if df.empty or "이름" not in df.columns:
+    if df.empty or "이름" not in df.columns or "생년월일" not in df.columns:
         return None
-    hit = df[df["이름"].astype(str).str.strip() == name.strip()]
+    hit = df[(df["이름"].astype(str).str.strip() == name.strip())
+             & (df["생년월일"].astype(str).str.strip() == str(birth).strip())]
     return hit.iloc[-1].to_dict() if not hit.empty else None
 
 
-def register(name: str, org: str, zone: str, trade: str, age: int,
+def register(name: str, birth: str, org: str, zone: str, trade: str,
              day: int | None, is_return: bool) -> bool:
+    """연령은 생년월일에서 계산한다. 따로 묻지 않는다."""
     return _append(SURVEY_PATH, SURVEY_COLS, {
         "등록시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "이름": name.strip(), "소속": org.strip(),
+        "이름": name.strip(), "생년월일": str(birth).strip(),
+        "소속": org.strip(),
         "작업구역": zone.strip(), "공종": trade.strip(),
-        "연령": int(age) if age else "",
+        "연령": age_from(birth),
         "투입일차": day if day else "",
         "복귀자": "예" if is_return else "아니오",
     }, f"survey: {name.strip()} 등록")
@@ -210,6 +243,7 @@ def submit_report(worker: dict, symptom_count: int) -> bool:
     return _append(REPORT_PATH, REPORT_COLS, {
         "시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "이름": str(worker.get("이름", "")),
+        "생년월일": str(worker.get("생년월일", "")),
         "소속": str(worker.get("소속", "")),
         "작업구역": str(worker.get("작업구역", "")),
         "증상개수": int(symptom_count),
@@ -262,13 +296,19 @@ def render_worker_entry() -> dict | None:
         return me
 
     st.subheader("👷 근로자 확인")
-    name = st.text_input("이름", placeholder="홍길동",
-                         help="현장에 등록한 이름을 입력하세요")
-    if not name.strip():
-        st.caption("이름을 입력하면 등록 여부를 확인합니다.")
+    c1, c2 = st.columns(2)
+    name = c1.text_input("이름", placeholder="홍길동")
+    birth = c2.text_input("생년월일 8자리", placeholder="19700315", max_chars=8,
+                          help="동명이인 구분과 연령(민감군 ③고령) 판정에 사용합니다")
+
+    if not name.strip() or not birth.strip():
+        st.caption("이름과 생년월일을 입력하면 등록 여부를 확인합니다.")
+        return None
+    if not valid_birth(birth):
+        st.error("생년월일을 8자리로 정확히 입력하세요. 예) 19700315")
         return None
 
-    found = find_worker(name)
+    found = find_worker(name, birth)
     if found:
         st.session_state["_worker"] = found
         st.rerun()
@@ -277,12 +317,11 @@ def render_worker_entry() -> dict | None:
     st.info("처음 오셨네요. 아래 정보를 한 번만 입력하면 "
             "다음부터는 바로 이용할 수 있습니다.", icon="📝")
 
+    st.caption(f"**{name.strip()}** · 만 {age_from(birth)}세")
     c1, c2 = st.columns(2)
     org = c1.text_input("소속 (협력사)", placeholder="○○건설")
     zone = c2.text_input("작업구역", placeholder="3공구")
     trade = c1.text_input("공종", placeholder="철근")
-    # 연령은 민감정보가 아니며, 지침 민감군 ③고령(65세 이상) 판정에 쓰인다.
-    age = c2.number_input("연령", 15, 90, 40, 1)
 
     st.markdown("##### 폭염작업 투입")
     t1, t2 = st.columns(2)
@@ -292,19 +331,20 @@ def render_worker_entry() -> dict | None:
     if track != "해당 없음":
         day = t2.number_input("투입 며칠째", 1, 30, 1)
 
-    st.caption("ℹ️ 이 정보는 폭염 안전조치 목적으로만 사용됩니다. "
-               "질환·약물 등 건강 정보는 이 앱에 저장하지 않으며, "
-               "보건관리자가 별도로 관리합니다. "
+    st.caption("ℹ️ 이 정보는 폭염 안전조치 목적으로만 사용되며, 비공개 "
+               "저장소에 보관됩니다. 질환·약물 등 건강 정보는 이 앱에 "
+               "저장하지 않으며 보건관리자가 별도로 관리합니다. "
                "(산업안전보건법 제132조제2항)")
 
     if st.button("등록하고 시작하기", type="primary", use_container_width=True,
                  disabled=not (org.strip() and zone.strip())):
-        if register(name, org, zone, trade, age, day,
+        if register(name, birth, org, zone, trade, day,
                     track.startswith("복귀")):
             st.session_state["_worker"] = {
-                "이름": name.strip(), "소속": org.strip(),
+                "이름": name.strip(), "생년월일": birth.strip(),
+                "소속": org.strip(),
                 "작업구역": zone.strip(), "공종": trade.strip(),
-                "연령": int(age), "투입일차": day if day else "",
+                "연령": age_from(birth), "투입일차": day if day else "",
                 "복귀자": "예" if track.startswith("복귀") else "아니오",
             }
             st.rerun()
@@ -381,7 +421,10 @@ GH_BRANCH = "main"''', language="toml")
             st.error(f"🚨 미확인 신고 {pending}건 — 즉시 현장 확인이 필요합니다.",
                      icon="🚨")
 
-        st.dataframe(view, hide_index=True, use_container_width=True)
+        rv = view.copy()
+        if "생년월일" in rv.columns:
+            rv = rv.drop(columns=["생년월일"])
+        st.dataframe(rv, hide_index=True, use_container_width=True)
 
         if not view.empty:
             st.markdown("##### 처리상태 변경")
@@ -410,8 +453,13 @@ GH_BRANCH = "main"''', language="toml")
         st.caption("등록된 근로자가 없습니다. "
                    "근로자 모드에서 QR로 접속해 등록합니다.")
     else:
-        st.dataframe(sv, hide_index=True, use_container_width=True,
-                     height=min(320, 40 + 35 * len(sv)))
+        # 생년월일은 화면에 그대로 띄우지 않는다. 조치에는 연령이면 충분하고,
+        # 어깨너머로 노출될 이유가 없다.
+        view = sv.copy()
+        if "생년월일" in view.columns:
+            view["생년월일"] = view["생년월일"].astype(str).str[:4] + "****"
+        st.dataframe(view, hide_index=True, use_container_width=True,
+                     height=min(320, 40 + 35 * len(view)))
         st.download_button("📥 등록 명부 CSV (TBM 명단 업로드용)",
                            sv.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"근로자명부_{datetime.now():%Y%m%d}.csv",
