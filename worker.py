@@ -41,7 +41,7 @@ SURVEY_PATH = "data/worker_survey.csv"
 REPORT_PATH = "data/worker_reports.csv"
 
 SURVEY_COLS = ["등록시각", "이름", "소속", "작업구역", "공종",
-               "투입일차", "복귀자"]
+               "연령", "투입일차", "복귀자"]
 REPORT_COLS = ["시각", "이름", "소속", "작업구역", "증상개수", "처리상태"]
 
 STATUS = ["미확인", "확인함", "조치완료"]
@@ -55,15 +55,43 @@ RETRY = 3
 # =====================================================================
 
 def _cfg() -> dict:
-    """secrets에서 GitHub 설정을 읽는다."""
+    """secrets에서 GitHub 설정을 읽는다.
+
+    실패 이유를 함께 담는다. 그냥 빈 값을 돌려주면
+    "키가 없는 것"과 "secrets 자체를 못 읽는 것"이 구분되지 않아
+    원인을 찾을 수 없다.
+    """
+    out = {"token": "", "repo": "", "branch": "main", "why": ""}
     try:
-        return {
-            "token": str(st.secrets.get("GH_TOKEN", "") or "").strip(),
-            "repo": str(st.secrets.get("GH_REPO", "") or "").strip(),
-            "branch": str(st.secrets.get("GH_BRANCH", "main") or "main").strip(),
-        }
-    except Exception:
-        return {"token": "", "repo": "", "branch": "main"}
+        tok = str(st.secrets.get("GH_TOKEN", "") or "").strip()
+        repo = str(st.secrets.get("GH_REPO", "") or "").strip()
+        br = str(st.secrets.get("GH_BRANCH", "main") or "main").strip()
+    except Exception as e:
+        out["why"] = (f"secrets를 읽지 못했습니다 ({type(e).__name__}). "
+                      "TOML 문법 오류일 수 있습니다.")
+        return out
+
+    missing = [k for k, v in [("GH_TOKEN", tok), ("GH_REPO", repo)] if not v]
+    if missing:
+        out["why"] = f"{', '.join(missing)} 가 secrets에 없습니다"
+        return out
+    if "/" not in repo:
+        out["why"] = (f"GH_REPO 형식이 잘못되었습니다 — 현재 «{repo}». "
+                      "«사용자명/저장소명» 형태여야 합니다.")
+        return out
+
+    out.update({"token": tok, "repo": repo, "branch": br})
+    return out
+
+
+def diagnose() -> str:
+    """설정 상태를 사람이 읽을 수 있게."""
+    c = _cfg()
+    if c["why"]:
+        return c["why"]
+    tok = c["token"]
+    masked = f"{tok[:10]}…{tok[-4:]}" if len(tok) > 14 else "설정됨"
+    return f"저장소 {c['repo']} · 브랜치 {c['branch']} · 토큰 {masked}"
 
 
 def is_enabled() -> bool:
@@ -151,12 +179,13 @@ def find_worker(name: str) -> dict | None:
     return hit.iloc[-1].to_dict() if not hit.empty else None
 
 
-def register(name: str, org: str, zone: str, trade: str,
+def register(name: str, org: str, zone: str, trade: str, age: int,
              day: int | None, is_return: bool) -> bool:
     return _append(SURVEY_PATH, SURVEY_COLS, {
         "등록시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "이름": name.strip(), "소속": org.strip(),
         "작업구역": zone.strip(), "공종": trade.strip(),
+        "연령": int(age) if age else "",
         "투입일차": day if day else "",
         "복귀자": "예" if is_return else "아니오",
     }, f"survey: {name.strip()} 등록")
@@ -217,8 +246,9 @@ def render_worker_entry() -> dict | None:
       (실운영에서는 개인별 QR 발급으로 확장 가능)
     """
     if not is_enabled():
-        st.info("근로자 등록이 설정되지 않았습니다. "
-                "관리자에게 직접 알리세요.", icon="ℹ️")
+        st.info("근로자 등록이 아직 설정되지 않았습니다. "
+                "증상이 있으면 관리자나 동료에게 직접 알리세요.", icon="ℹ️")
+        st.caption(f"(관리자용 정보: {diagnose()})")
         return None
 
     me = st.session_state.get("_worker")
@@ -251,6 +281,8 @@ def render_worker_entry() -> dict | None:
     org = c1.text_input("소속 (협력사)", placeholder="○○건설")
     zone = c2.text_input("작업구역", placeholder="3공구")
     trade = c1.text_input("공종", placeholder="철근")
+    # 연령은 민감정보가 아니며, 지침 민감군 ③고령(65세 이상) 판정에 쓰인다.
+    age = c2.number_input("연령", 15, 90, 40, 1)
 
     st.markdown("##### 폭염작업 투입")
     t1, t2 = st.columns(2)
@@ -260,16 +292,19 @@ def render_worker_entry() -> dict | None:
     if track != "해당 없음":
         day = t2.number_input("투입 며칠째", 1, 30, 1)
 
-    st.caption("ℹ️ 이 정보는 폭염 안전조치 목적으로만 사용되며, "
-               "건강 관련 항목은 저장하지 않습니다.")
+    st.caption("ℹ️ 이 정보는 폭염 안전조치 목적으로만 사용됩니다. "
+               "질환·약물 등 건강 정보는 이 앱에 저장하지 않으며, "
+               "보건관리자가 별도로 관리합니다. "
+               "(산업안전보건법 제132조제2항)")
 
     if st.button("등록하고 시작하기", type="primary", use_container_width=True,
                  disabled=not (org.strip() and zone.strip())):
-        if register(name, org, zone, trade, day, track.startswith("복귀")):
+        if register(name, org, zone, trade, age, day,
+                    track.startswith("복귀")):
             st.session_state["_worker"] = {
                 "이름": name.strip(), "소속": org.strip(),
                 "작업구역": zone.strip(), "공종": trade.strip(),
-                "투입일차": day if day else "",
+                "연령": int(age), "투입일차": day if day else "",
                 "복귀자": "예" if track.startswith("복귀") else "아니오",
             }
             st.rerun()
@@ -308,8 +343,19 @@ def render_admin() -> None:
     st.subheader("🚨 근로자 신고 현황")
 
     if not is_enabled():
-        st.info("GitHub 저장소가 설정되지 않았습니다. "
-                "secrets에 GH_TOKEN, GH_REPO를 등록하세요.")
+        st.warning(f"근로자 신고 저장소가 설정되지 않았습니다 — {diagnose()}",
+                   icon="⚠️")
+        with st.expander("설정 방법"):
+            st.code('''GH_TOKEN  = "github_pat_..."
+GH_REPO   = "사용자명/저장소명"
+GH_BRANCH = "main"''', language="toml")
+            st.caption("Streamlit Cloud → Manage app → Settings → Secrets 에 "
+                       "위 세 줄을 추가하고 Save 하세요. 저장 후 앱이 자동으로 "
+                       "재시작됩니다.")
+            st.caption("토큰은 GitHub → Settings → Developer settings → "
+                       "Personal access tokens → Fine-grained tokens 에서 "
+                       "발급하며, 해당 저장소에 Contents: Read and write "
+                       "권한이 필요합니다.")
         return
 
     df = load_reports()

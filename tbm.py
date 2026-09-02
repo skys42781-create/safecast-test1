@@ -159,6 +159,79 @@ def make_demo_roster(n: int = 45, seed: int = 7) -> pd.DataFrame:
     })
 
 
+def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
+    """근로자 등록 명부 → 표준 출역 명부.
+
+    등록에서 받는 것은 조치 전달에 필요한 최소 정보뿐이다.
+      이름 · 소속 · 작업구역 · 공종 · 연령 · 투입일차 · 복귀자
+
+    질환·약물 등 건강 정보는 받지 않으므로 False로 둔다.
+    민감군 ①②④⑤는 관리자가 올리는 보건 CSV로 병합해야 판정된다.
+    자동으로 판정되는 것은 ③고령(연령) · ⑥고강도(공종) · ⑦신규배치(투입일차)다.
+
+    [왜 건강 정보를 등록에서 받지 않는가]
+      산업안전보건법 제132조제2항은 본인 동의 없는 건강정보 공개를 금지한다.
+      근로자 앱에 저장하면 보관·동의·파기 의무가 따라붙고, 저장소가 공개
+      저장소라면 위험이 더 크다. 접근을 보건관리자로 좁히는 편이 안전하다.
+    """
+    if sv is None or sv.empty:
+        return pd.DataFrame(columns=ROSTER_COLUMNS)
+
+    out = pd.DataFrame({
+        "성명": sv.get("이름", pd.Series(dtype=str)).astype(str).str.strip(),
+        "소속": sv.get("소속", ""),
+        "작업구역": sv.get("작업구역", ""),
+        "공종": sv.get("공종", "미상").fillna("미상").replace("", "미상"),
+        "연령": pd.to_numeric(sv.get("연령"), errors="coerce").fillna(0).astype(int),
+        "투입일차": pd.to_numeric(sv.get("투입일차"), errors="coerce")
+                     .fillna(999).astype(int),
+        "복귀자": sv.get("복귀자", "").astype(str).str.strip() == "예",
+    })
+    for c in ["만성질환", "온열질환기왕력", "약물복용",
+              "알코올의존", "일시적건강저하"]:
+        out[c] = False
+    out["옥외작업"] = True
+
+    # 같은 사람이 여러 번 등록했으면 최근 것만.
+    out = out[out["성명"] != ""].drop_duplicates(subset="성명", keep="last")
+    return out.reset_index(drop=True)
+
+
+def merge_health(roster: pd.DataFrame, health: pd.DataFrame) -> pd.DataFrame:
+    """등록 명부에 보건관리자 CSV를 성명으로 병합한다.
+
+    보건 CSV에는 질환 플래그만 담는다(병명 없음).
+      성명, 만성질환, 온열질환기왕력, 약물복용, 알코올의존, 일시적건강저하
+    연령·옥외작업이 함께 들어 있으면 그것도 덮어쓴다.
+    """
+    if roster.empty or health is None or health.empty:
+        return roster
+    h = health.copy()
+    if "성명" not in h.columns:
+        return roster
+    h["성명"] = h["성명"].astype(str).str.strip()
+
+    flags = ["만성질환", "온열질환기왕력", "약물복용",
+             "알코올의존", "일시적건강저하"]
+    use = ["성명"] + [c for c in flags + ["연령", "옥외작업"] if c in h.columns]
+    h = h[use].drop_duplicates(subset="성명", keep="last")
+
+    for c in [c for c in flags + ["옥외작업"] if c in h.columns]:
+        h[c] = h[c].astype(str).str.strip().str.lower().isin(
+            ["true", "1", "y", "yes", "예", "o", "○"])
+    if "연령" in h.columns:
+        h["연령"] = pd.to_numeric(h["연령"], errors="coerce")
+
+    out = roster.merge(h, on="성명", how="left", suffixes=("", "_h"))
+    for c in [c for c in flags + ["옥외작업"] if f"{c}_h" in out.columns]:
+        out[c] = out[f"{c}_h"].fillna(out[c])
+        out = out.drop(columns=[f"{c}_h"])
+    if "연령_h" in out.columns:
+        out["연령"] = out["연령_h"].fillna(out["연령"]).astype(int)
+        out = out.drop(columns=["연령_h"])
+    return out
+
+
 def normalize_roster(df: pd.DataFrame) -> pd.DataFrame:
     """업로드된 CSV를 표준 컬럼으로 보정. 없는 컬럼은 기본값으로 채운다."""
     out = df.copy()

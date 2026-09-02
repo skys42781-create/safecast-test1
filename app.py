@@ -1108,10 +1108,22 @@ def main() -> None:
     # ⚠️ Streamlit은 모든 탭 본문을 매 실행마다 위에서부터 평가한다.
     #    명부 로딩을 탭 안에 두면 '휴식 알람'(먼저 평가)이 이전 명부를 쓰게 되므로
     #    탭보다 먼저 한 번만 로드한다.
+    # 명부 출처는 세 층이다.
+    #   ① 근로자 앱 등록 명부 (worker_survey.csv) — 자동, 최신
+    #   ② 관리자 업로드 CSV                       — 건강 플래그 병합용
+    #   ③ 시연용 더미                              — 둘 다 없을 때
+    # 등록 명부에는 건강 정보가 없으므로, ②를 병합해야 민감군 ①②④⑤가 판정된다.
     roster = st.session_state.get("_roster")
+    roster_src = st.session_state.get("_roster_src", "")
     if roster is None:
-        roster = T.make_demo_roster()
+        sv = W.load_survey() if W.is_enabled() else pd.DataFrame()
+        reg = T.from_survey(sv)
+        if not reg.empty:
+            roster, roster_src = reg, f"근로자 앱 등록 {len(reg)}명"
+        else:
+            roster, roster_src = T.make_demo_roster(), "시연용 더미"
         st.session_state["_roster"] = roster
+        st.session_state["_roster_src"] = roster_src
     day_tbm = T.build_tbm(roster, day_tier.code)
 
     # ---- 격자별 예보 편의 보정 ----
@@ -1186,20 +1198,40 @@ def main() -> None:
 
     with t4:
         st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 자동 선별합니다.")
+        st.caption(f"현재 명부: **{roster_src}** · {len(roster)}명")
+
+        c_a, c_b = st.columns(2)
+        if c_a.button("🔄 등록 명부 새로고침", use_container_width=True,
+                      disabled=not W.is_enabled()):
+            W.load_survey.clear()
+            st.session_state.pop("_roster", None)
+            st.session_state.pop("_roster_src", None)
+            st.rerun()
+        if c_b.button("🟡 시연용 더미로 전환", use_container_width=True):
+            st.session_state["_roster"] = T.make_demo_roster()
+            st.session_state["_roster_src"] = "시연용 더미"
+            st.rerun()
+
         up = st.file_uploader(
-            "출역 명부 CSV (미업로드 시 시연용 더미 사용)", type="csv",
-            help="컬럼: " + ", ".join(T.ROSTER_COLUMNS))
+            "보건 정보 CSV (선택) — 등록 명부에 성명으로 병합", type="csv",
+            help="컬럼: 성명, 만성질환, 온열질환기왕력, 약물복용, "
+                 "알코올의존, 일시적건강저하 (연령·옥외작업도 있으면 반영)")
         if up is not None:
             try:
-                new_roster = T.normalize_roster(pd.read_csv(up))
-                if not new_roster.equals(roster):
-                    st.session_state["_roster"] = new_roster
-                    st.rerun()          # 모든 탭이 같은 명부를 쓰도록 즉시 재실행
-                st.success(f"출역 명부 {len(roster)}명 로드")
+                merged = T.merge_health(roster, pd.read_csv(up))
+                if not merged.equals(roster):
+                    st.session_state["_roster"] = merged
+                    st.session_state["_roster_src"] = roster_src + " + 보건 CSV"
+                    st.rerun()
+                st.success(f"보건 정보 병합 완료 · {len(merged)}명")
             except Exception as e:
                 st.error(f"CSV 읽기 실패 → 기존 명부 유지\n\n`{e}`")
-        else:
-            st.caption("🟡 시연용 더미 명부 — 실제 현장에서는 출역시스템 CSV/DB 연동")
+
+        st.caption("ℹ️ 근로자 앱 등록으로 자동 판정되는 항목: "
+                   "**③고령 · ⑥고강도작업 · ⑦신규배치 · 열순응 %**")
+        st.caption("ℹ️ 질환·약물 등 민감군 ①②④⑤는 등록에서 받지 않습니다. "
+                   "보건관리자가 관리하는 CSV를 위에 올리면 병합됩니다. "
+                   "(산업안전보건법 제132조제2항 — 본인 동의 없는 건강정보 공개 금지)")
 
         st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
