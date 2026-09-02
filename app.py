@@ -1026,9 +1026,17 @@ def main() -> None:
             st.warning(f"고도 자동 조회(Open-Elevation)에 실패해 수동 입력값 "
                        f"{manual_site_elev}m를 사용했습니다. 사이드바 «고도 보정»에서 "
                        f"현장 해발고도를 확인하세요.", icon="⚠️")
-        _rname = (f"{ref['ta_src']['name']} ({ref['ta_src']['kind']})"
-                  if ref.get("ok") else f"기상청 격자 ({nx}, {ny})")
-        _rdist = ref["ta_src"]["dist"] if ref.get("ok") else None
+        # 고도만 관측소 기준으로 쓰는 경우(elev_only)에도 지점 이름을 표시해야 한다.
+        # "기상청 격자 해발 716m"로 나오면 격자 고도를 안다는 오해를 준다.
+        if ref.get("ta_src"):
+            t = ref["ta_src"]
+            _rname = f"{t['name']} ({t['kind']})"
+            if ref.get("elev_only"):
+                _rname += " · 고도 기준만"
+            _rdist = t["dist"]
+        else:
+            _rname = f"기상청 격자 ({nx}, {ny})"
+            _rdist = None
         C.render_panel(corr, raw_ta, raw_rh, raw_at, cur_at,
                        site_elev, ref_elev if use_lapse else None,
                        _rname, _rdist, now.month)
