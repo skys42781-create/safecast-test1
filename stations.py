@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -96,8 +97,35 @@ def _parse_fixed(text: str) -> pd.DataFrame:
 # 지점 목록
 # =====================================================================
 
+LOCAL_STATIONS = {
+    "SFC": Path(__file__).resolve().parent / "data" / "stations_asos.csv",
+    "AWS": Path(__file__).resolve().parent / "data" / "stations_aws.csv",
+}
+
+
 @st.cache_data(ttl=86400 * 7, show_spinner=False)
-def load_stations(key: str, kind: str = "SFC") -> pd.DataFrame:
+def load_local_stations(kind: str) -> pd.DataFrame:
+    """레포에 내장된 지점목록.
+
+    [왜 파일을 먼저 보는가]
+      관측소 위치·고도는 몇 년에 한 번 바뀔 뿐인데, 배포 환경에서 기상청 API가
+      막히면 기준 고도를 못 구해 고도 보정이 통째로 빠진다.
+      파일로 두면 API 상태와 무관하게 기준 고도를 항상 확보할 수 있다.
+      (scripts/fetch_stations.py 로 생성)
+    """
+    p = LOCAL_STATIONS.get(kind)
+    if not p or not p.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(p)
+        need = {"stn_id", "name", "lat", "lon", "ref_elev"}
+        return df if need.issubset(df.columns) else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=86400 * 7, show_spinner=False)
+def load_stations_api(key: str, kind: str = "SFC") -> pd.DataFrame:
     """지점 목록. kind: SFC(ASOS) / AWS.
 
     관측소 위치·고도는 거의 변하지 않으므로 일주일 캐시한다.
@@ -139,6 +167,17 @@ def load_stations(key: str, kind: str = "SFC") -> pd.DataFrame:
         # 기준 고도 = 노장해발고도 + 온도계 지상높이
         res["ref_elev"] = res["ht"] + res["ht_ta"]
     return res
+
+
+def load_stations(key: str, kind: str = "SFC") -> pd.DataFrame:
+    """지점목록. 내장 파일을 우선 쓰고, 없으면 API로 받는다."""
+    local = load_local_stations(kind)
+    if not local.empty:
+        return local
+    try:
+        return load_stations_api(key, kind)
+    except Exception:
+        return pd.DataFrame()
 
 
 def _has_hangul(s: str) -> bool:
@@ -299,14 +338,30 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
     res = {"ok": False, "ta": None, "rh": None,
            "ta_src": None, "rh_src": None, "ref_elev": None, "note": ""}
 
-    if _down():
-        res["note"] = ("직전 호출 실패로 쿨다운 중입니다 "
-                       f"(최대 {COOLDOWN_SEC // 60}분). 잠시 후 다시 시도됩니다.")
-        return res
-
-    # ---- ASOS: 습도 확보용 ----
+    # 지점목록은 내장 파일이라 API 상태와 무관하다. 먼저 확보한다.
     asos = load_stations(key, "SFC")
     a_near = best_reference(asos, lat, lon, site_elev, 3)
+
+    # 실황 호출만 쿨다운 대상이다.
+    if _down():
+        cand = a_near.head(1)
+        if not cand.empty:
+            r = cand.iloc[0]
+            res.update({
+                "elev_only": True,
+                "ref_elev": float(r["ref_elev"]),
+                "ta_src": {"name": str(r["name"]), "stn": int(r["stn_id"]),
+                           "dist": float(r["dist_km"]),
+                           "elev": float(r["ref_elev"]), "kind": "ASOS"},
+                "note": (f"실황 호출은 쿨다운 중이지만 {r['name']}"
+                         f"({r['dist_km']:.1f}km, {r['ref_elev']:.0f}m)의 "
+                         f"고도를 기준으로 보정합니다"),
+            })
+            return res
+        res["note"] = (f"직전 호출 실패로 쿨다운 중입니다 "
+                       f"(최대 {COOLDOWN_SEC // 60}분).")
+        return res
+
     a_hit = None
     for r in a_near.itertuples():
         d = asos_now(key, int(r.stn_id), tm)
@@ -327,6 +382,23 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
                 break
 
     if a_hit is None and w_hit is None:
+        # 실황은 못 받았지만 지점목록(고도)은 있을 수 있다.
+        # 그러면 격자 실황값을 관측소 고도 기준으로 보정할 수 있으므로,
+        # 기준 고도만이라도 돌려준다. 보정을 통째로 버리는 것보다 낫다.
+        cand = best_reference(asos, lat, lon, site_elev, 1)
+        if not cand.empty:
+            r = cand.iloc[0]
+            res.update({
+                "elev_only": True,
+                "ref_elev": float(r["ref_elev"]),
+                "ta_src": {"name": str(r["name"]), "stn": int(r["stn_id"]),
+                           "dist": float(r["dist_km"]),
+                           "elev": float(r["ref_elev"]), "kind": "ASOS"},
+                "note": (f"관측소 실황은 못 받았지만 {r['name']}"
+                         f"({r['dist_km']:.1f}km, {r['ref_elev']:.0f}m)의 "
+                         f"고도를 기준으로 보정합니다"),
+            })
+            return res
         res["note"] = ("인근 관측소 실황을 가져오지 못했습니다. "
                        "기상청 연결이 불안정하면 격자 실황·수집 스냅샷으로 "
                        "대체됩니다.")
@@ -371,6 +443,13 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
 
 def render_source(ref: dict) -> None:
     """기준 지점 표시. 거리가 멀면 신뢰도 경고."""
+    if ref.get("elev_only"):
+        t = ref["ta_src"]
+        st.caption(f"🏔️ 고도 기준만 적용 — **{t['name']}**(ASOS) · "
+                   f"{t['dist']:.1f}km · 기준고도 {t['elev']:.0f}m")
+        st.caption("실황은 기상청 격자값이며, 고도 보정만 관측소 기준으로 합니다.")
+        return
+
     if not ref.get("ok"):
         note = ref.get("note") or "원인 미상 (관측소 응답 없음)"
         st.caption(f"⚪ 관측소 기준 미적용 — {note}")

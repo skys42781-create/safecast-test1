@@ -976,6 +976,11 @@ def main() -> None:
             raw_rh = ref["rh"] if ref.get("rh") is not None else cur_rh
             ref_elev = ref["ref_elev"]
             cur_src = f"{ref['ta_src']['kind']} 실황"
+        elif ref.get("elev_only") and ref.get("ref_elev") is not None:
+            # 실황은 못 받았지만 관측소 고도는 확보됐다.
+            # 격자 실황값을 그 고도 기준으로 보정한다.
+            raw_ta, raw_rh = cur_ta, cur_rh
+            ref_elev = ref["ref_elev"]
         else:
             raw_ta, raw_rh = cur_ta, cur_rh
             # 격자값의 대표 고도는 공개되지 않는다. 사이드바 기본값을 기준으로
