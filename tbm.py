@@ -509,7 +509,8 @@ def badge(level: str, text: str) -> str:
             f'margin-right:5px;">{icon} {level} · {text}</span>')
 
 
-def render_worker_check(day_tier_code: str = "NORMAL") -> None:
+def render_worker_check(day_tier_code: str = "NORMAL",
+                        me: dict | None = None) -> None:
     """근로자 모드 — 자각증상 자가진단 중심.
 
     [왜 증상 체크를 맨 앞에 두는가]
@@ -568,9 +569,45 @@ def render_worker_check(day_tier_code: str = "NORMAL") -> None:
     else:
         st.success("체크된 증상이 없습니다. 갈증을 느끼기 전에 물을 자주 드세요.")
 
-    # ---- 3) 내 열순응 단계 (선택) ----
+    # ---- 2-1) 증상 신고 ----
+    if n >= SYMPTOM_THRESHOLD and me:
+        st.divider()
+        try:
+            import worker as W
+            W.render_report(me, n)
+        except Exception:
+            pass
+
+    # ---- 3) 내 열순응 단계 ----
     st.divider()
-    with st.expander("🔍 내 열순응 단계 확인하기 (신규 투입·복귀자)"):
+    if me and str(me.get("투입일차", "")).strip():
+        # 등록 시 받은 값으로 자동 계산한다. 매번 다시 묻지 않는다.
+        try:
+            _day = int(float(me["투입일차"]))
+            _ret = str(me.get("복귀자", "")).strip() == "예"
+            _r = acclim_ratio(_day, _ret)
+        except (ValueError, TypeError):
+            _r = None
+        if _r is not None:
+            _tr = "복귀" if _ret else "신규 투입"
+            st.markdown(
+                f'<div style="background:#FEF3C7;border-left:6px solid #F59E0B;'
+                f'padding:14px 16px;border-radius:8px;">'
+                f'<div style="font-size:15px;color:#92400E;">오늘 허용 작업량</div>'
+                f'<div style="font-size:34px;font-weight:800;color:#B45309;'
+                f'line-height:1.2;">{_r}%</div>'
+                f'<div style="font-size:13px;color:#78350F;">'
+                f'{_tr} {_day}일차 · 정상 작업량의 {_r}%까지만 작업하세요</div>'
+                f'</div>', unsafe_allow_html=True)
+            if _day <= 2:
+                st.error("⚠️ 온열질환 사망자의 **70.9%가 투입 1~2일차**에 "
+                         "발생합니다. 무리하지 마세요.", icon="🚨")
+            if day_tier_code == "CRITICAL":
+                st.error("🚫 체감온도 38℃ 이상 — 민감군 옥외작업 제한 대상입니다. "
+                         "관리자에게 배치 조정을 요청하세요.")
+            st.caption(f"근거: {ACCLIM_SRC}")
+
+    with st.expander("🔍 내 열순응 단계 직접 확인하기"):
         st.caption("처음 폭염작업을 하거나, 연속 7일 이상 쉬었다가 복귀한 경우")
         c1, c2 = st.columns(2)
         track = c1.radio("구분", ["신규 투입", "복귀(7일 이상 쉼)"], key="acc_track")

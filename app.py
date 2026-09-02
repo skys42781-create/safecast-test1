@@ -31,6 +31,7 @@ import streamlit as st
 
 import correction as C
 import records as R
+import worker as W
 import snapshot as SNAP
 import stations as S
 import tbm as T
@@ -1076,7 +1077,16 @@ def main() -> None:
             st.error("🚫 " + day_tier.action_texts[-1], icon="🚨")
 
         st.divider()
-        T.render_worker_check(day_tier.code)
+
+        # 첫 접속이면 설문, 등록되어 있으면 바로 신고 화면으로.
+        # 매번 소속·구역을 다시 묻지 않아야 실제로 쓰인다.
+        me = W.render_worker_entry()
+        if me is None:
+            st.caption("등록 후 증상 자가진단과 신고를 이용할 수 있습니다.")
+            return
+
+        st.divider()
+        T.render_worker_check(day_tier.code, me)
 
         st.divider()
         st.caption("🛑 몸이 이상하면 즉시 작업을 멈추고 알리세요. "
@@ -1122,9 +1132,16 @@ def main() -> None:
         today_df = fc[fc["day"] == today]
         tmr_df = fc[fc["day"] == tomorrow]
 
-    t1, t2, t6, t4, t7, t3 = st.tabs(
+    _pending = 0
+    if W.is_enabled():
+        _rp = W.load_reports()
+        if not _rp.empty:
+            _pending = int((_rp["처리상태"] == "미확인").sum())
+    _rtab = f"🚨 신고 ({_pending})" if _pending else "🚨 신고"
+
+    t1, t2, t6, t4, t8, t7, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-         "⏰ 알람", "👷 TBM 타겟 명단", "📝 조치 기록", "📖 법적 근거"])
+         "⏰ 알람", "👷 TBM 타겟 명단", _rtab, "📝 조치 기록", "📖 법적 근거"])
 
     with t1:
         C.render_forecast_bias(fbias)
@@ -1186,6 +1203,9 @@ def main() -> None:
 
         st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
+
+    with t8:
+        W.render_admin()
 
     with t7:
         _b = build_blocks(today_df, today, conservative) if not today_df.empty \
