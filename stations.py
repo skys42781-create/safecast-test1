@@ -299,6 +299,11 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
     res = {"ok": False, "ta": None, "rh": None,
            "ta_src": None, "rh_src": None, "ref_elev": None, "note": ""}
 
+    if _down():
+        res["note"] = ("직전 호출 실패로 쿨다운 중입니다 "
+                       f"(최대 {COOLDOWN_SEC // 60}분). 잠시 후 다시 시도됩니다.")
+        return res
+
     # ---- ASOS: 습도 확보용 ----
     asos = load_stations(key, "SFC")
     a_near = best_reference(asos, lat, lon, site_elev, 3)
@@ -367,7 +372,10 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
 def render_source(ref: dict) -> None:
     """기준 지점 표시. 거리가 멀면 신뢰도 경고."""
     if not ref.get("ok"):
-        st.caption(f"⚪ 관측소 기준 미적용 — {ref.get('note', '')}")
+        note = ref.get("note") or "원인 미상 (관측소 응답 없음)"
+        st.caption(f"⚪ 관측소 기준 미적용 — {note}")
+        st.caption("→ 기준 고도를 알 수 없어 고도 보정을 건너뜁니다. "
+                   "표시값은 기상청 격자 원본입니다.")
         return
 
     t = ref["ta_src"]

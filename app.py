@@ -786,9 +786,13 @@ def main() -> None:
             e1, e2 = st.columns(2)
             manual_site_elev = e1.number_input("현장 고도(m)", 0, 2000, 50, 10,
                                                disabled=auto_elev)
+            manual_ref = st.checkbox(
+                "기준 고도 직접 지정", value=False, disabled=use_station,
+                help="관측소를 못 잡을 때만 씁니다. 격자값의 대표 고도는 "
+                     "공개되지 않으므로, 모르는 채로 넣으면 보정이 틀립니다.")
             ref_elev_in = e2.number_input("기준 고도(m)", 0, 2000, 50, 10,
-                                          disabled=use_station,
-                                          help="관측소 기준을 끄면 직접 입력")
+                                          disabled=use_station or not manual_ref,
+                                          help="관측소 기준을 끄고 직접 지정할 때만 사용")
 
         with st.expander("🔧 현장 설정"):
             conservative = st.toggle("보수적 MAX 적용", value=True,
@@ -952,15 +956,21 @@ def main() -> None:
 
         # 관측소 조회는 별도 API(typ01)를 쓴다. 여기서 예외가 나면
         # 화면 전체가 죽으므로, 실패해도 격자 기준으로 계속 진행한다.
-        ref = {"ok": False}
-        if use_station and not demo and kma:
+        ref = {"ok": False, "note": "«관측소 실황 기준»이 꺼져 있습니다"}
+        if demo:
+            ref["note"] = "데모 모드에서는 관측소를 조회하지 않습니다"
+        elif not kma:
+            ref["note"] = "기상청 인증키가 없습니다"
+        elif use_station:
             try:
                 ref = S.pick_reference(kma, lat, lon,
                                        ncst_dt.strftime("%Y%m%d%H%M") if ncst_dt
                                        else now.strftime("%Y%m%d%H00"),
                                        use_aws, site_elev)
-            except Exception:
-                ref = {"ok": False}
+            except Exception as e:
+                # 왜 안 됐는지 남기지 않으면 원인을 찾을 수 없다.
+                ref = {"ok": False,
+                       "note": f"관측소 조회 실패 — {mask_secret(e)[:120]}"}
         if ref.get("ok") and ref.get("ta") is not None:
             raw_ta = ref["ta"]
             raw_rh = ref["rh"] if ref.get("rh") is not None else cur_rh
@@ -968,7 +978,11 @@ def main() -> None:
             cur_src = f"{ref['ta_src']['kind']} 실황"
         else:
             raw_ta, raw_rh = cur_ta, cur_rh
-            ref_elev = float(ref_elev_in)
+            # 격자값의 대표 고도는 공개되지 않는다. 사이드바 기본값을 기준으로
+            # 쓰면 근거 없는 보정이 되고, 고도차가 클수록 오차가 증폭된다.
+            # (예: 하이원에서 기준 50m로 두면 -5.5℃라는 잘못된 보정이 나온다)
+            # → 기준 고도를 모르면 보정하지 않는다. 보정량 0 = 원본이다.
+            ref_elev = float(ref_elev_in) if manual_ref else None
 
         raw_at = apparent_temp(raw_ta, raw_rh)
 
@@ -1001,6 +1015,8 @@ def main() -> None:
         # 삼항연산자를 쓰면 결과값 None이 화면에 그대로 출력된다.
         if use_station and not demo:
             S.render_source(ref)
+        elif ref.get("note"):
+            st.caption(f"⚪ 관측소 기준 미적용 — {ref['note']}")
         if elev_failed:
             st.warning(f"고도 자동 조회(Open-Elevation)에 실패해 수동 입력값 "
                        f"{manual_site_elev}m를 사용했습니다. 사이드바 «고도 보정»에서 "
