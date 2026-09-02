@@ -94,29 +94,117 @@ def correct_ta_rh(ta: float, rh: float, delta_t: float) -> tuple[float, float]:
 ELEV_TIMEOUT = (4, 6)
 ELEV_COOLDOWN_SEC = 600
 
+# 내장 고도표와 좌표가 이 거리 안이면 같은 지점으로 본다.
+# 5km 격자 안에서도 지형이 크게 달라지므로 좁게 잡는다.
+KNOWN_MATCH_KM = 1.5
+
+KNOWN_SITES_CSV = Path(__file__).resolve().parent / "data" / "site_elevation.csv"
+
+# 대체 API. 서비스가 다르므로 한쪽이 죽어도 우회가 된다.
+ELEV_APIS = [
+    {"name": "Open-Elevation",
+      "url": "https://api.open-elevation.com/api/v1/lookup",
+      "params": lambda la, lo: {"locations": f"{la},{lo}"},
+      "pick": lambda js: float(js["results"][0]["elevation"])},
+    {"name": "Open-Meteo",
+      "url": "https://api.open-meteo.com/v1/elevation",
+      "params": lambda la, lo: {"latitude": la, "longitude": lo},
+      "pick": lambda js: float(js["elevation"][0])},
+]
+
+
+def _km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * 6371.0 * math.asin(math.sqrt(a))
+
+
+@st.cache_data(ttl=86400 * 7, show_spinner=False)
+def load_known_sites() -> pd.DataFrame:
+    """레포에 내장된 현장 고도표.
+
+    [왜 파일을 두는가]
+      Open-Elevation은 무료 공개 서비스라 종종 응답하지 않는다.
+      시연·운영할 지점의 고도는 변하지 않으므로 미리 저장해 두면
+      외부 서비스 상태와 무관하게 보정이 유지된다.
+      (관측소 지점목록을 내장한 것과 같은 이유)
+    """
+    try:
+        df = pd.read_csv(KNOWN_SITES_CSV)
+        need = {"name", "lat", "lon", "elev"}
+        return df if need.issubset(df.columns) else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _from_known(lat: float, lon: float) -> tuple[float | None, str]:
+    """내장 고도표에서 찾는다."""
+    t = load_known_sites()
+    if t.empty:
+        return None, ""
+    best, bd = None, 1e9
+    for r in t.itertuples():
+        d = _km(lat, lon, float(r.lat), float(r.lon))
+        if d < bd:
+            best, bd = r, d
+    if best is not None and bd <= KNOWN_MATCH_KM:
+        return float(best.elev), f"내장 고도표 · {best.name}({bd:.1f}km)"
+    return None, ""
+
+
+def _from_api(lat: float, lon: float) -> tuple[float | None, str]:
+    """대체 API를 순서대로 시도한다."""
+    t = st.session_state.get("_elev_down_at")
+    if t and (time.time() - t) < ELEV_COOLDOWN_SEC:
+        return None, "직전 실패로 쿨다운 중"
+
+    errs = []
+    for ep in ELEV_APIS:
+        try:
+            r = requests.get(ep["url"], params=ep["params"](lat, lon),
+                             timeout=ELEV_TIMEOUT)
+            r.raise_for_status()
+            v = ep["pick"](r.json())
+            if -100 < v < 3000:
+                st.session_state.pop("_elev_down_at", None)
+                return v, ep["name"]
+            errs.append(f"{ep['name']}: 범위 밖({v})")
+        except Exception as e:
+            errs.append(f"{ep['name']}: {type(e).__name__}")
+    st.session_state["_elev_down_at"] = time.time()
+    return None, " / ".join(errs)
+
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_elevation(lat: float, lon: float) -> float | None:
-    """좌표 → 해발고도(m). 실패하면 None (호출부에서 수동 입력으로 대체).
+    """좌표 → 해발고도(m). 하위 호환용 래퍼."""
+    v, _ = resolve_elevation(lat, lon)
+    return v
 
-    [왜 쿨다운이 필요한가]
-      Open-Elevation은 무료 공개 서비스라 종종 응답하지 않는다.
-      화면을 조작할 때마다 매번 타임아웃까지 기다리면 앱이 느려진다.
+
+def resolve_elevation(lat: float, lon: float) -> tuple[float | None, str]:
+    """현장 고도를 4단계로 구한다.
+
+      ① 내장 고도표      시연·운영 지점. 외부 의존 없음
+      ② Open-Elevation
+      ③ Open-Meteo       대체 API
+      ④ 실패             None을 돌려주어 보정을 생략한다
+
+    [왜 실패 시 임의 값을 쓰지 않는가]
+      기준 고도를 모르는 채 기본값(예: 50m)으로 보정하면 고도차가 크게
+      잘못 잡혀 오히려 원본보다 나빠진다. 실제로 해발 952m 지점에서
+      기준을 50m로 두어 -5.5도라는 잘못된 보정이 나온 사례가 있었다.
+      보정량 0(= 원본)이 항상 안전하다.
     """
-    t = st.session_state.get("_elev_down_at")
-    if t and (time.time() - t) < ELEV_COOLDOWN_SEC:
-        return None
-    try:
-        r = requests.get(OPEN_ELEVATION,
-                         params={"locations": f"{lat},{lon}"},
-                         timeout=ELEV_TIMEOUT)
-        r.raise_for_status()
-        v = float(r.json()["results"][0]["elevation"])
-        st.session_state.pop("_elev_down_at", None)
-        return v
-    except Exception:
-        st.session_state["_elev_down_at"] = time.time()
-        return None
+    v, why = _from_known(lat, lon)
+    if v is not None:
+        return v, why
+    v, why = _from_api(lat, lon)
+    if v is not None:
+        return v, why
+    return None, why or "고도를 확인할 수 없습니다"
 
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

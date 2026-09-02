@@ -783,7 +783,9 @@ def main() -> None:
                                 help="AWS(510지점)가 ASOS(100지점)보다 촘촘합니다. "
                                      "기온은 더 가까운 쪽, 습도는 ASOS를 씁니다.")
             auto_elev = st.toggle("현장 고도 자동 조회", value=True,
-                                  help="Open-Elevation API. 실패 시 수동 입력.")
+                                  help="내장 고도표 → Open-Elevation → Open-Meteo "
+                                       "순으로 조회합니다. 모두 실패하면 보정을 "
+                                       "건너뛰므로, 이 토글을 끄고 직접 입력하세요.")
             e1, e2 = st.columns(2)
             manual_site_elev = e1.number_input("현장 고도(m)", 0, 2000, 50, 10,
                                                disabled=auto_elev)
@@ -940,20 +942,23 @@ def main() -> None:
         # 관측소는 고도(HT + HT_TA)가 공개되어 보정식이 확정된다.
         # 현장 고도를 먼저 확보한다. 기준 지점 선정에도 쓰이기 때문이다.
         site_elev = None
+        elev_why = ""
         elev_failed = False
         if use_lapse:
             if auto_elev:
                 try:
-                    site_elev = C.get_elevation(lat, lon)
-                except Exception:
-                    site_elev = None
+                    site_elev, elev_why = C.resolve_elevation(lat, lon)
+                except Exception as e:
+                    site_elev, elev_why = None, type(e).__name__
                 if site_elev is None:
-                    # 자동 조회가 막히면 보정이 통째로 빠진다.
-                    # 조용히 건너뛰지 말고 수동 입력값으로 대체하고 알린다.
-                    site_elev = float(manual_site_elev)
+                    # 임의 값으로 보정하면 원본보다 나빠질 수 있다.
+                    # 실제로 해발 952m 지점에서 기준을 50m로 두어
+                    # -5.5도라는 잘못된 보정이 나온 사례가 있었다.
+                    # 모르면 보정하지 않는 것이 안전하다.
                     elev_failed = True
             else:
                 site_elev = float(manual_site_elev)
+                elev_why = "수동 입력"
 
         # 관측소 조회는 별도 API(typ01)를 쓴다. 여기서 예외가 나면
         # 화면 전체가 죽으므로, 실패해도 격자 기준으로 계속 진행한다.
@@ -1024,9 +1029,14 @@ def main() -> None:
         elif ref.get("note"):
             st.caption(f"⚪ 관측소 기준 미적용 — {ref['note']}")
         if elev_failed:
-            st.warning(f"고도 자동 조회(Open-Elevation)에 실패해 수동 입력값 "
-                       f"{manual_site_elev}m를 사용했습니다. 사이드바 «고도 보정»에서 "
-                       f"현장 해발고도를 확인하세요.", icon="⚠️")
+            st.warning(
+                f"현장 해발고도를 확인하지 못해 **고도 보정을 건너뜁니다** "
+                f"— {elev_why}. 임의 값으로 보정하면 원본보다 부정확해질 수 "
+                f"있으므로 기상청 원본 값을 그대로 표시합니다.", icon="⚠️")
+            st.caption("사이드바 «🏔️ 고도 보정»에서 «현장 고도 자동 조회»를 끄고 "
+                       "해발고도를 직접 입력하면 보정이 적용됩니다.")
+        elif elev_why and site_elev is not None:
+            st.caption(f"📍 현장 해발 {site_elev:.0f}m · 출처: {elev_why}")
         # 고도만 관측소 기준으로 쓰는 경우(elev_only)에도 지점 이름을 표시해야 한다.
         # "기상청 격자 해발 716m"로 나오면 격자 고도를 안다는 오해를 준다.
         if ref.get("ta_src"):
