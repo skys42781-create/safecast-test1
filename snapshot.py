@@ -1,5 +1,5 @@
 """
-Safecast — 수집 스냅샷
+SAFECASTY — 수집 스냅샷
 =======================
 GitHub Actions가 30분마다 쌓아 둔 data/*.csv 를 예보·실황의 공급원으로 쓴다.
 

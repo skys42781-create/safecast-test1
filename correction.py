@@ -1,5 +1,5 @@
 """
-Safecast — 지점 상세화 보정 (downscaling correction)
+SAFECASTY — 지점 상세화 보정 (downscaling correction)
 =====================================================
 기상청 격자값·관측소 실측값을 현장 지점 조건에 맞춰 보정한다.
 

@@ -1,5 +1,5 @@
 """
-Safecast — 스마트 건설 폭염 관제 대시보드
+SAFECASTY — 스마트 건설 폭염 관제 대시보드
 ==========================================
 건설현장 온열질환 예방을 위한 체감온도 기반 작업 통제 시스템.
 산업안전보건기준에 관한 규칙(2025.7 개정) 기준.
@@ -561,7 +561,7 @@ def loss_ratio(blocks: pd.DataFrame, strict: bool = False) -> float:
 # SECTION 5. 알고리즘 2 — T-20 / T-30 사전 알람
 # =====================================================================
 
-ALARM_TMPL = ("[Safecast] {lead}분 후 '{block}' 구간 진입\n"
+ALARM_TMPL = ("[SAFECASTY] {lead}분 후 '{block}' 구간 진입\n"
               "· 예상 체감온도 {at}℃ / {tier} ({legal})\n"
               "· 조치: {action}\n"
               "· 안전관리자: 휴게시설 냉방·음용수 상태 사전 점검 요망")
@@ -715,8 +715,63 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
 
 
 
+def render_logo() -> None:
+    """SAFECASTY 워드마크.
+
+    [디자인 의도]
+      · SAFE 는 currentColor 를 써서 라이트/다크 테마 어느 쪽에서도 읽힌다.
+      · CASTY 는 등급 색상(주의 #F59E0B → 위험 #DC2626)의 그라디언트를 쓴다.
+        앱 전체가 쓰는 색 체계와 로고를 일치시켜, 색 자체가 폭염을 뜻하게 한다.
+      · 좌측 마크는 온도계와 열파(熱波)를 겹친 형태다.
+    """
+    st.markdown("""
+<div style="display:flex;align-items:center;gap:14px;margin:4px 0 2px;">
+<svg width="52" height="52" viewBox="0 0 64 64" fill="none"
+     xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SAFECASTY">
+  <defs>
+    <linearGradient id="sc-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="55%" stop-color="#EA580C"/>
+      <stop offset="100%" stop-color="#DC2626"/>
+    </linearGradient>
+  </defs>
+  <!-- 방패: 안전 -->
+  <path d="M32 4 L56 13 V32 C56 46 45 56 32 60 C19 56 8 46 8 32 V13 Z"
+        fill="url(#sc-g)"/>
+  <!-- 온도계 기둥 -->
+  <rect x="29" y="16" width="6" height="21" rx="3" fill="#fff" opacity="0.95"/>
+  <circle cx="32" cy="42" r="7" fill="#fff" opacity="0.95"/>
+  <rect x="30.5" y="22" width="3" height="16" rx="1.5" fill="#DC2626"/>
+  <circle cx="32" cy="42" r="4.5" fill="#DC2626"/>
+  <!-- 열파 -->
+  <path d="M42 20 q3 -3 6 0 t6 0" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" fill="none" opacity="0.85"/>
+  <path d="M42 27 q3 -3 6 0 t6 0" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" fill="none" opacity="0.6"/>
+  <path d="M10 20 q3 -3 6 0 t6 0" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" fill="none" opacity="0.85"/>
+  <path d="M10 27 q3 -3 6 0 t6 0" stroke="#fff" stroke-width="2.4"
+        stroke-linecap="round" fill="none" opacity="0.6"/>
+</svg>
+<div style="line-height:1;">
+  <div style="font-size:38px;font-weight:800;letter-spacing:-0.5px;
+              font-family:'Pretendard','Malgun Gothic',system-ui,sans-serif;">
+    <span style="color:currentColor;">SAFE</span><span
+      style="background:linear-gradient(100deg,#F59E0B,#EA580C 55%,#DC2626);
+             -webkit-background-clip:text;background-clip:text;
+             -webkit-text-fill-color:transparent;color:#DC2626;">CASTY</span>
+  </div>
+  <div style="font-size:12.5px;letter-spacing:2.6px;opacity:.62;
+              margin-top:5px;font-weight:600;">
+    HEAT SAFETY FOR CONSTRUCTION SITES
+  </div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+
 def main() -> None:
-    st.set_page_config(page_title="Safecast", page_icon="🏗️", layout="wide")
+    st.set_page_config(page_title="SAFECASTY", page_icon="🏗️", layout="wide")
 
     # secrets.toml 파일 자체가 없으면 st.secrets 접근이 예외를 던진다 (로컬 첫 실행)
     try:
@@ -811,7 +866,7 @@ def main() -> None:
         if not demo and not kma:
             st.error("secrets.toml에 KMA_KEY를 등록하세요.")
 
-    st.title("🏗️ Safecast")
+    render_logo()
     st.caption("건설현장 폭염 관제 시스템 · 산업안전보건기준에 관한 규칙(2025.7 개정) 기준")
 
     # ---------- 위치 ----------

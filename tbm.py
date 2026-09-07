@@ -1,5 +1,5 @@
 """
-Safecast — TBM(작업 전 안전점검회의) 타겟 관리 모듈
+SAFECASTY — TBM(작업 전 안전점검회의) 타겟 관리 모듈
 ====================================================
 아침 조회에서 "오늘 누구를 집중 관리해야 하는가"를 자동 산출한다.
 
@@ -451,7 +451,7 @@ def render_acclim_alarm(tbm: pd.DataFrame, work_start: str, work_hours: float,
         alarm = g.iloc[0]["알람"]
         lines = "\n".join(f"  · {r['성명']} ({r['공종']}) — {r['트랙']} {r['허용']}"
                           for _, r in g.iterrows())
-        msg = (f"[Safecast] {lead_min}분 후 열순응 대상자 작업 종료\n"
+        msg = (f"[SAFECASTY] {lead_min}분 후 열순응 대상자 작업 종료\n"
                f"· {end}까지만 폭염작업 후 철수 또는 실내 전환\n"
                f"{lines}\n"
                f"· 근거: 대응지침 19쪽 열순응 프로그램")
@@ -559,7 +559,7 @@ def render_rest_alarm(blocks: pd.DataFrame, tbm: pd.DataFrame, lead_min: int,
     for _, r in alarms.iterrows():
         names = " ".join(f"{n}({s})" for n, s in
                          zip(targets["성명"], targets["사유"])) if not targets.empty else "없음"
-        msg = (f"[Safecast] {lead_min}분 후 휴식시간입니다\n"
+        msg = (f"[SAFECASTY] {lead_min}분 후 휴식시간입니다\n"
                f"· {r['휴식시작']}~{r['휴식종료']} 전원 휴식 ({r['근거']})\n"
                f"· 추가 배정 {len(targets)}명 — {r['추가종료(설정)']}까지\n"
                f"  {names}\n"
