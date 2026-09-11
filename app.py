@@ -30,6 +30,7 @@ import requests
 import streamlit as st
 
 import correction as C
+import hero as HERO
 import records as R
 import worker as W
 import snapshot as SNAP
@@ -1060,11 +1061,21 @@ def main() -> None:
         cur_at = apparent_temp(cur_ta, cur_rh)
         ct = classify(cur_at)
 
-        m = st.columns(4)
-        m[0].metric("현재 기온", f"{cur_ta}℃")
-        m[1].metric("현재 습도", f"{cur_rh}%")
-        m[2].metric("현재 체감온도", f"{cur_at}℃", delta=f"+{cur_at - cur_ta:.1f}℃")
-        m[3].metric("현재 등급", ct.short, delta=ct.legal, delta_color="off")
+        # ---- 히어로 (표시 전용 HTML 컴포넌트) ----
+        # 조작은 Streamlit 위젯에 남긴다. iframe 내부 클릭은 서버로 오지 않는다.
+        _td = fc[fc["day"] == today]
+        _ser = [{"hour": int(h), "at": float(a)} for h, a in
+                zip(_td["hour"], _td["at"]) if 8 <= int(h) <= 18]
+        if not _ser:
+            _ser = [{"hour": now.hour, "at": float(cur_at)}]
+        HERO.render_hero(
+            tier_short=ct.short, tier_legal=ct.legal,
+            ta=float(cur_ta), rh=float(cur_rh), at=float(cur_at),
+            series=_ser, now_hour=now.hour, site_name=name,
+            stamp=(f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
+            corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ 적용"
+                       if corr.get("applied") else "기상청 원본값"),
+        )
 
         stamp = f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src
         note = f"📡 {stamp} 기준"
