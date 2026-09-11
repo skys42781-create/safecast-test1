@@ -1061,8 +1061,37 @@ def main() -> None:
         cur_at = apparent_temp(cur_ta, cur_rh)
         ct = classify(cur_at)
 
-        # ---- 히어로 (표시 전용 HTML 컴포넌트) ----
-        # 조작은 Streamlit 위젯에 남긴다. iframe 내부 클릭은 서버로 오지 않는다.
+
+        stamp = f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src
+        note = f"📡 {stamp} 기준"
+        if cur_src == "초단기예보" and ncst_dt:
+            note += f" · 최종 관측 {ncst_dt:%H:%M} {obs_ta}℃ (체감 {obs_at}℃)"
+        # ---- 출처·근거는 화면에 상시 노출하지 않고 히어로 ⓘ 안으로 보낸다 ----
+        # 감사 대응에는 필요하나 현장에서 매번 읽을 내용은 아니며,
+        # 상시 노출하면 정작 읽어야 할 등급과 온도가 묻힌다.
+        _details = []
+        _details.append(
+            note + (" · 인근 관측소 실측값" if ref.get("ok") else " · 기상청 격자(5km) 값")
+            + "이며 현장 실측이 아닙니다.")
+        if ref.get("ok") and ref.get("ta_src"):
+            _t = ref["ta_src"]
+            _details.append(f"기준 관측소 {_t['name']}({_t['kind']}) · "
+                            f"{_t['dist']:.1f}km · 기준고도 {_t['elev']:.0f}m")
+        elif ref.get("elev_only") and ref.get("ta_src"):
+            _t = ref["ta_src"]
+            _details.append(f"고도 기준만 적용 — {_t['name']}(ASOS) · "
+                            f"{_t['dist']:.1f}km · 기준고도 {_t['elev']:.0f}m. "
+                            f"실황은 기상청 격자값입니다.")
+        elif ref.get("note"):
+            _details.append(f"관측소 기준 미적용 — {ref['note']}")
+        if site_elev is not None and elev_why:
+            _details.append(f"현장 해발 {site_elev:.0f}m · 출처 {elev_why}")
+        if corr.get("applied"):
+            _details.append(f"고도 보정 {corr['delta_t']:+.2f}℃ · {corr['reason']}")
+            _details.append("습도는 이슬점을 보존한 채 재계산했습니다.")
+        _details.append("관측소(잔디·백엽상)와 건설현장(콘크리트·철골)의 "
+                        "미기후 격차는 보정 대상이 아닙니다.")
+
         _td = fc[fc["day"] == today]
         _ser = [{"hour": int(h), "at": float(a)} for h, a in
                 zip(_td["hour"], _td["at"]) if 8 <= int(h) <= 18]
@@ -1075,48 +1104,15 @@ def main() -> None:
             stamp=(f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
             corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ 적용"
                        if corr.get("applied") else "기상청 원본값"),
+            details=_details,
         )
 
-        stamp = f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src
-        note = f"📡 {stamp} 기준"
-        if cur_src == "초단기예보" and ncst_dt:
-            note += f" · 최종 관측 {ncst_dt:%H:%M} {obs_ta}℃ (체감 {obs_at}℃)"
-        # 기준이 관측소인지 격자인지에 따라 문구가 달라야 한다.
-        if ref.get("ok"):
-            st.caption(note + " · 인근 관측소 실측값이며 현장 실측이 아닙니다. "
-                       "관측소는 잔디·백엽상 환경이라, 철골·콘크리트면은 "
-                       "이보다 높을 수 있습니다.")
-        else:
-            st.caption(note + " · 기상청 격자(5km) 값이며 현장 실측이 아닙니다. "
-                       "철골·콘크리트면은 이보다 높을 수 있습니다.")
-        # 삼항연산자를 쓰면 결과값 None이 화면에 그대로 출력된다.
-        if use_station and not demo:
-            S.render_source(ref)
-        elif ref.get("note"):
-            st.caption(f"⚪ 관측소 기준 미적용 — {ref['note']}")
+        # 보정이 통째로 빠지는 경우는 판정에 직접 영향을 주므로 화면에 남긴다.
         if elev_failed:
             st.warning(
                 f"현장 해발고도를 확인하지 못해 **고도 보정을 건너뜁니다** "
-                f"— {elev_why}. 임의 값으로 보정하면 원본보다 부정확해질 수 "
-                f"있으므로 기상청 원본 값을 그대로 표시합니다.", icon="⚠️")
-            st.caption("사이드바 «🏔️ 고도 보정»에서 «현장 고도 자동 조회»를 끄고 "
-                       "해발고도를 직접 입력하면 보정이 적용됩니다.")
-        elif elev_why and site_elev is not None:
-            st.caption(f"📍 현장 해발 {site_elev:.0f}m · 출처: {elev_why}")
-        # 고도만 관측소 기준으로 쓰는 경우(elev_only)에도 지점 이름을 표시해야 한다.
-        # "기상청 격자 해발 716m"로 나오면 격자 고도를 안다는 오해를 준다.
-        if ref.get("ta_src"):
-            t = ref["ta_src"]
-            _rname = f"{t['name']} ({t['kind']})"
-            if ref.get("elev_only"):
-                _rname += " · 고도 기준만"
-            _rdist = t["dist"]
-        else:
-            _rname = f"기상청 격자 ({nx}, {ny})"
-            _rdist = None
-        C.render_panel(corr, raw_ta, raw_rh, raw_at, cur_at,
-                       site_elev, ref_elev if use_lapse else None,
-                       _rname, _rdist, now.month)
+                f"— {elev_why}. 기상청 원본 값을 그대로 표시합니다.", icon="⚠️")
+
 
     today_df, tmr_df = fc[fc["day"] == today], fc[fc["day"] == tomorrow]
     day_max = float(today_df["at"].max()) if not today_df.empty else float(fc["at"].max())

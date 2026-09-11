@@ -49,10 +49,17 @@ def render_hero(*, tier_short: str, tier_legal: str,
                 ta: float, rh: float, at: float,
                 series: list[dict], now_hour: int,
                 site_name: str, stamp: str,
-                corr_note: str = "") -> None:
+                corr_note: str = "",
+                details: list[str] | None = None) -> None:
     """히어로 카드.
 
-    series: [{"hour": 8, "at": 31.2}, ...]  오늘 08~18시 체감온도
+    series:  [{"hour": 8, "at": 31.2}, ...]  오늘 08~18시 체감온도
+    details: 측정 출처·보정 근거 등. 화면에 상시 노출하지 않고 ⓘ 안에 넣는다.
+
+    [왜 근거를 숨기는가]
+      출처와 보정 내역은 감사 대응에 필요하지만, 현장에서 매번 읽을 내용은
+      아니다. 상시 노출하면 정작 읽어야 할 등급과 온도가 묻힌다.
+      필요할 때 열어보는 자리로 옮기되, 접근은 한 번의 동작으로 끝나게 한다.
     """
     c = _color(tier_short)
     pulse = any(t in tier_short for t in PULSE_TIERS)
@@ -64,6 +71,7 @@ def render_hero(*, tier_short: str, tier_legal: str,
         "site": site_name, "stamp": stamp,
         "bg": c["bg"], "accent": c["accent"],
         "pulse": pulse, "corr": corr_note,
+        "details": [d for d in (details or []) if d and d.strip()],
     }, ensure_ascii=False)
 
     components.html(_HTML.replace("__DATA__", payload), height=330, scrolling=False)
@@ -112,6 +120,23 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
   margin-top:2px;position:relative;z-index:2}
 .note{font-size:11.5px;opacity:.72;margin-top:10px;line-height:1.5;
   position:relative;z-index:2}
+.info{width:26px;height:26px;border-radius:50%;border:none;cursor:pointer;
+  background:rgba(255,255,255,.20);color:#fff;font-size:13px;font-weight:700;
+  font-family:inherit;line-height:1;transition:transform .18s cubic-bezier(.34,1.56,.64,1),
+  background .18s;flex:none}
+.info:hover{background:rgba(255,255,255,.34);transform:scale(1.12)}
+.info:active{transform:scale(.92)}
+.info.on{background:rgba(255,255,255,.92);color:#111}
+.panel{position:absolute;top:62px;right:22px;width:min(330px,calc(100% - 44px));
+  background:rgba(17,17,17,.93);border-radius:18px;padding:14px 16px;z-index:9;
+  opacity:0;transform:scale(.94) translateY(-6px);pointer-events:none;
+  transition:opacity .2s,transform .22s cubic-bezier(.34,1.56,.64,1)}
+.panel.on{opacity:1;transform:none;pointer-events:auto}
+.panel li{list-style:none;font-size:12.5px;line-height:1.55;opacity:.92;
+  padding:5px 0;border-bottom:1px solid rgba(255,255,255,.10)}
+.panel li:last-child{border-bottom:none}
+.panel h4{font-size:11.5px;font-weight:700;opacity:.6;margin-bottom:6px;
+  letter-spacing:.4px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 </style>
 
@@ -121,8 +146,12 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
       <div class="site" id="site"></div>
       <div class="live"><span class="dot"></span><span id="stamp"></span></div>
     </div>
-    <div class="badge" id="badge"></div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div class="badge" id="badge"></div>
+      <button class="info" id="info" aria-label="측정 출처와 보정 근거">i</button>
+    </div>
   </div>
+  <div class="panel" id="panel"><h4>측정 출처 · 보정 근거</h4><ul id="plist"></ul></div>
   <div class="main">
     <div class="temp" id="temp">--</div>
     <div class="unit">℃</div>
@@ -147,6 +176,22 @@ document.getElementById('badge').textContent = D.tier + ' · ' + D.legal;
 document.getElementById('ta').textContent = D.ta.toFixed(1);
 document.getElementById('rh').textContent = Math.round(D.rh);
 document.getElementById('note').textContent = D.corr;
+
+const info = document.getElementById('info');
+const panel = document.getElementById('panel');
+if (D.details && D.details.length) {
+  document.getElementById('plist').innerHTML =
+    D.details.map(function(x){ return '<li>' + x + '</li>'; }).join('');
+  info.addEventListener('click', function(e){
+    e.stopPropagation();
+    panel.classList.toggle('on'); info.classList.toggle('on');
+  });
+  document.addEventListener('click', function(){
+    panel.classList.remove('on'); info.classList.remove('on');
+  });
+} else {
+  info.style.display = 'none';
+}
 
 const tempEl = document.getElementById('temp');
 let cur = 0;
