@@ -649,7 +649,13 @@ def timeline(df: pd.DataFrame, title: str,
 
 def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int,
                strict: bool = False,
-               blocks_def: list[WorkBlock] | None = None) -> None:
+               blocks_def: list[WorkBlock] | None = None,
+               show_summary: bool = True) -> None:
+    """하루치 판정 화면.
+
+    show_summary: 요약 지표(최고 체감온도·중지 블록·손실률) 표시 여부.
+      오늘 탭은 히어로가 같은 지표를 이미 보여주므로 False로 둔다.
+    """
     blocks = build_blocks(day_df, target, conservative, blocks_def)
     if blocks.empty:
         st.warning("해당 일자의 예보 데이터가 없습니다.")
@@ -659,13 +665,14 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
     dmax = day_df["at"].max()
     dt_ = classify(dmax)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("최고 체감온도", f"{dmax:.1f}℃",
-              delta=f"기온 대비 +{dmax - day_df['ta'].max():.1f}℃")
-    c2.metric("통제 등급", dt_.short, delta=dt_.legal, delta_color="off")
-    c3.metric("작업중지 블록", f"{int(work['stop_work'].sum())} / {len(work)}")
-    c4.metric("작업시간 손실률", f"{loss_ratio(blocks, strict)}%",
-              delta="의무만" if strict else None, delta_color="off")
+    if show_summary:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("최고 체감온도", f"{dmax:.1f}℃",
+                  delta=f"기온 대비 +{dmax - day_df['ta'].max():.1f}℃")
+        c2.metric("통제 등급", dt_.short, delta=dt_.legal, delta_color="off")
+        c3.metric("작업중지 블록", f"{int(work['stop_work'].sum())} / {len(work)}")
+        c4.metric("작업시간 손실률", f"{loss_ratio(blocks, strict)}%",
+                  delta="의무만" if strict else None, delta_color="off")
 
     # ---- 조치사항: 의무 / 권고 구분 표시 ----
     acts = dt_.actions_by(strict)
@@ -700,19 +707,19 @@ def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int
         for _, r in blocks.iterrows():
             st.markdown(block_card(r), unsafe_allow_html=True)
     with R:
-        st.plotly_chart(timeline(day_df, f"{target:%m월 %d일} 체감온도", blocks_def),
+        # 제목을 비운다. 축 라벨과 겹쳐 둘 다 읽히지 않는다.
+        st.plotly_chart(timeline(day_df, "", blocks_def),
                         use_container_width=True)
 
-        st.markdown("##### 블록별 휴식 계획")
-        found = False
-        for _, r in blocks.iterrows():
-            s = rest_slots(r, strict)
-            if s:
-                found = True
+        # 휴식 계획은 있을 때만 낸다. 빈 안내문이 매번 자리를 차지할 이유가 없다.
+        _plans = [(r, rest_slots(r, strict)) for _, r in blocks.iterrows()]
+        _plans = [(r, sl) for r, sl in _plans if sl]
+        if _plans:
+            st.markdown("##### 블록별 휴식 계획")
+            for r, sl in _plans:
                 st.caption(f"**{r['block_name']}** — {r['tier_label']}")
-                st.dataframe(pd.DataFrame(s), hide_index=True, use_container_width=True)
-        if not found:
-            st.info("정기 휴식 부여 기준(체감온도 33℃) 미도달")
+                st.dataframe(pd.DataFrame(sl), hide_index=True,
+                             use_container_width=True)
 
 
 
@@ -980,6 +987,17 @@ def main() -> None:
         SNAP.render_banner(obs_meta, "실황")
 
     # ---------- 현재 상황 (관측 + 현재시각 추정) ----------
+    # 데모 모드에는 실황이 없다. 예보에서 현재 시각 값을 꺼내 대신 쓴다.
+    # 없으면 히어로가 통째로 사라져 화면 구성이 달라지고 시연이 어긋난다.
+    if ncst is None and fc is not None and not fc.empty:
+        _cur = fc[(fc["day"] == today) & (fc["hour"] == now.hour)]
+        if _cur.empty:
+            _cur = fc[fc["day"] == today].tail(1)
+        if not _cur.empty:
+            _r = _cur.iloc[0]
+            ncst = {"T1H": float(_r["ta"]), "REH": float(_r["rh"])}
+            ncst_dt = _r["datetime"].to_pydatetime()
+
     if ncst and "T1H" in ncst and "REH" in ncst:
         obs_ta, obs_rh = ncst["T1H"], ncst["REH"]
         obs_at = apparent_temp(obs_ta, obs_rh)
@@ -1097,6 +1115,24 @@ def main() -> None:
                 zip(_td["hour"], _td["at"]) if 8 <= int(h) <= 18]
         if not _ser:
             _ser = [{"hour": now.hour, "at": float(cur_at)}]
+        # ---- 히어로 지표: 오늘의 판정 요약 ----
+        # st.metric으로 흩어 놓으면 "지금"과 "오늘 전체"가 분리되어 읽힌다.
+        _blk = build_blocks(_td, today, conservative)
+        _stats = []
+        if not _blk.empty:
+            _w = _blk[_blk["is_work"]]
+            _dmax = float(_td["at"].max())
+            _dt = classify(_dmax)
+            _stop = int(_w["stop_work"].sum())
+            _stats = [
+                {"label": "오늘 최고 체감온도", "value": f"{_dmax:.1f}℃",
+                 "note": f"{_dt.short} · 기온 대비 +{_dmax - _td['ta'].max():.1f}℃"},
+                {"label": "작업중지 블록", "value": f"{_stop} / {len(_w)}",
+                 "note": "블록 내 최고값 기준"},
+                {"label": "작업시간 손실률", "value": f"{loss_ratio(_blk, strict)}%",
+                 "note": "법적 의무만" if strict else "의무 + 권고"},
+            ]
+
         HERO.render_hero(
             tier_short=ct.short, tier_legal=ct.legal,
             ta=float(cur_ta), rh=float(cur_rh), at=float(cur_at),
@@ -1104,7 +1140,7 @@ def main() -> None:
             stamp=(f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
             corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ 적용"
                        if corr.get("applied") else "기상청 원본값"),
-            details=_details,
+            details=_details, stats=_stats, demo=demo,
         )
 
         # 보정이 통째로 빠지는 경우는 판정에 직접 영향을 주므로 화면에 남긴다.
@@ -1232,7 +1268,8 @@ def main() -> None:
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
-            render_day(today_df, today, conservative, lead, strict)
+            render_day(today_df, today, conservative, lead, strict,
+                       show_summary=False)
 
     with t2:
         C.render_forecast_bias(fbias)
