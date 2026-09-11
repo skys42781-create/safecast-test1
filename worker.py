@@ -424,7 +424,10 @@ GH_BRANCH = "main"''', language="toml")
         rv = view.copy()
         if "생년월일" in rv.columns:
             rv = rv.drop(columns=["생년월일"])
-        st.dataframe(rv, hide_index=True, use_container_width=True)
+        # 미확인이 있으면 열어 두고, 없으면 접는다.
+        # 확인이 필요한 상태를 놓치지 않게 하되 평소엔 화면을 비운다.
+        with st.expander(f"신고 내역 · {len(view)}건", expanded=bool(pending)):
+            st.dataframe(rv, hide_index=True, use_container_width=True)
 
         if not view.empty:
             st.markdown("##### 처리상태 변경")
@@ -446,8 +449,6 @@ GH_BRANCH = "main"''', language="toml")
                            file_name=f"근로자신고_{datetime.now():%Y%m%d}.csv",
                            mime="text/csv")
 
-    st.divider()
-    st.markdown("##### 👷 등록 근로자")
     sv = load_survey()
     if sv.empty:
         st.caption("등록된 근로자가 없습니다. "
@@ -458,11 +459,12 @@ GH_BRANCH = "main"''', language="toml")
         view = sv.copy()
         if "생년월일" in view.columns:
             view["생년월일"] = view["생년월일"].astype(str).str[:4] + "****"
-        st.dataframe(view, hide_index=True, use_container_width=True,
-                     height=min(320, 40 + 35 * len(view)))
-        st.download_button("📥 등록 명부 CSV (TBM 명단 업로드용)",
-                           sv.to_csv(index=False).encode("utf-8-sig"),
-                           file_name=f"근로자명부_{datetime.now():%Y%m%d}.csv",
-                           mime="text/csv")
-        st.caption("ℹ️ 건강 관련 항목은 저장하지 않습니다. "
-                   "민감군 판정에 필요한 질환 정보는 보건관리자가 별도로 관리합니다.")
+        with st.expander(f"👷 등록 근로자 · {len(sv)}명", expanded=False):
+            st.dataframe(view, hide_index=True, use_container_width=True,
+                         height=min(320, 40 + 35 * len(view)))
+            st.download_button("📥 등록 명부 CSV (TBM 명단 업로드용)",
+                               sv.to_csv(index=False).encode("utf-8-sig"),
+                               file_name=f"근로자명부_{datetime.now():%Y%m%d}.csv",
+                               mime="text/csv")
+            st.caption("ℹ️ 건강 관련 항목은 저장하지 않습니다. 민감군 판정에 "
+                       "필요한 질환 정보는 보건관리자가 별도로 관리합니다.")

@@ -241,7 +241,10 @@ def render(blocks: pd.DataFrame, hourly: pd.DataFrame, target_date,
                 changed=changed)
 
         df = temp_log_df()
-        st.dataframe(df, hide_index=True, use_container_width=True, height=320)
+        # 시간별 원본은 감사 대응용이다. 평소엔 접어 두고 필요할 때 연다.
+        with st.expander(f"시간별 기록 · {len(df)}행", expanded=False):
+            st.dataframe(df, hide_index=True, use_container_width=True,
+                         height=320)
 
         n_change = int((df["등급변동"] != "").sum()) if not df.empty else 0
         c1, c2, c3 = st.columns(3)

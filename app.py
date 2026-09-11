@@ -781,6 +781,18 @@ def render_logo() -> None:
 def main() -> None:
     st.set_page_config(page_title="SAFECASTY", page_icon="🏗️", layout="wide")
 
+    # 한 화면에 표가 여러 개 펼쳐져 있으면 무엇을 먼저 봐야 할지 알 수 없다.
+    # 접어 두고 필요한 것만 열게 하되, 헤더에 건수를 붙여 열지 않고도
+    # 확인이 필요한지 판단할 수 있게 한다.
+    st.markdown("""<style>
+    div[data-testid="stExpander"]{border:none;border-radius:18px;
+      background:var(--secondary-background-color);margin-bottom:10px}
+    div[data-testid="stExpander"] summary{padding:13px 18px;font-weight:600}
+    div[data-testid="stExpander"] summary:hover{background:rgba(128,128,128,.06)}
+    div[data-testid="stExpander"] div[data-testid="stExpanderDetails"]{
+      padding:2px 18px 14px}
+    </style>""", unsafe_allow_html=True)
+
     # secrets.toml 파일 자체가 없으면 st.secrets 접근이 예외를 던진다 (로컬 첫 실행)
     try:
         kakao = st.secrets.get("KAKAO_KEY", "")
@@ -986,6 +998,9 @@ def main() -> None:
     if obs_meta.get("ok"):
         SNAP.render_banner(obs_meta, "실황")
 
+    # 히어로가 그려지지 않는 경로에서도 탭 제목이 이 값을 쓴다.
+    _alerts = 0
+
     # ---------- 현재 상황 (관측 + 현재시각 추정) ----------
     # 데모 모드에는 실황이 없다. 예보에서 현재 시각 값을 꺼내 대신 쓴다.
     # 없으면 히어로가 통째로 사라져 화면 구성이 달라지고 시연이 어긋난다.
@@ -1110,6 +1125,18 @@ def main() -> None:
         _details.append("관측소(잔디·백엽상)와 건설현장(콘크리트·철골)의 "
                         "미기후 격차는 보정 대상이 아닙니다.")
 
+        # 미확인 신고는 히어로 ⓘ에 배지로 알린다. 탭을 열지 않아도 보이게.
+        _alerts = 0
+        if W.is_enabled() and not demo:
+            try:
+                _rp = W.load_reports()
+                if not _rp.empty:
+                    _tdy = now.strftime("%Y-%m-%d")
+                    _alerts = int(((_rp["처리상태"] == "미확인") &
+                                   _rp["시각"].astype(str).str.startswith(_tdy)).sum())
+            except Exception:
+                _alerts = 0
+
         _td = fc[fc["day"] == today]
         _ser = [{"hour": int(h), "at": float(a)} for h, a in
                 zip(_td["hour"], _td["at"]) if 8 <= int(h) <= 18]
@@ -1141,6 +1168,7 @@ def main() -> None:
             corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ 적용"
                        if corr.get("applied") else "기상청 원본값"),
             details=_details, stats=_stats, demo=demo,
+            alerts=_alerts,
         )
 
         # 보정이 통째로 빠지는 경우는 판정에 직접 영향을 주므로 화면에 남긴다.
@@ -1252,12 +1280,7 @@ def main() -> None:
         today_df = fc[fc["day"] == today]
         tmr_df = fc[fc["day"] == tomorrow]
 
-    _pending = 0
-    if W.is_enabled():
-        _rp = W.load_reports()
-        if not _rp.empty:
-            _pending = int((_rp["처리상태"] == "미확인").sum())
-    _rtab = f"🚨 신고 ({_pending})" if _pending else "🚨 신고"
+    _rtab = f"🚨 신고 ({_alerts})" if _alerts else "🚨 신고"
 
     t1, t2, t6, t4, t8, t7, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
@@ -1289,60 +1312,64 @@ def main() -> None:
         else:
             ba = build_alarms(_blocks, lead)
             if not ba.empty:
-                st.markdown("##### 🚧 블록 진입 알람")
-                st.caption("등급이 올라가는 구간에 들어가기 전 사전 통보")
-                st.dataframe(ba[["발송시각", "대상 블록", "블록 시작", "등급", "체감온도"]],
-                             hide_index=True, use_container_width=True)
-                for _, a in ba.iterrows():
-                    with st.expander(f"{a['발송시각']} → {a['대상 블록']} 진입"):
+                with st.expander(f"🚧 블록 진입 알람 · {len(ba)}건", expanded=True):
+                    st.caption("등급이 올라가는 구간에 들어가기 전 사전 통보")
+                    st.dataframe(
+                        ba[["발송시각", "대상 블록", "블록 시작", "등급", "체감온도"]],
+                        hide_index=True, use_container_width=True)
+                    for _, a in ba.iterrows():
+                        st.caption(f"**{a['발송시각']} → {a['대상 블록']} 진입**")
                         st.code(a["메시지"], language=None)
-                st.divider()
 
-            T.render_rest_alarm(_blocks, _tbm, lead, extra_min,
-                                lambda b: rest_slots(b, strict),
-                                now.strftime("%H:%M"))
-            st.divider()
-            T.render_acclim_alarm(_tbm, work_start, work_hours, lead,
-                                  now.strftime("%H:%M"))
+            with st.expander("💧 휴식 알람", expanded=False):
+                T.render_rest_alarm(_blocks, _tbm, lead, extra_min,
+                                    lambda b: rest_slots(b, strict),
+                                    now.strftime("%H:%M"))
+
+            with st.expander("🌡️ 열순응 종료 알람", expanded=False):
+                T.render_acclim_alarm(_tbm, work_start, work_hours, lead,
+                                      now.strftime("%H:%M"))
 
     with t4:
-        st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 자동 선별합니다.")
-        st.caption(f"현재 명부: **{roster_src}** · {len(roster)}명")
+        # 명부 교체·병합은 매번 볼 내용이 아니다. 접어 두고 헤더에 현황만 남긴다.
+        with st.expander(f"📋 명부 설정 · {roster_src} {len(roster)}명",
+                         expanded=False):
+            st.caption("출역 데이터를 연동해 온열질환 민감군·열순응 대상자를 "
+                       "자동 선별합니다.")
 
-        c_a, c_b = st.columns(2)
-        if c_a.button("🔄 등록 명부 새로고침", use_container_width=True,
-                      disabled=not W.is_enabled()):
-            W.load_survey.clear()
-            st.session_state.pop("_roster", None)
-            st.session_state.pop("_roster_src", None)
-            st.rerun()
-        if c_b.button("🟡 시연용 더미로 전환", use_container_width=True):
-            st.session_state["_roster"] = T.make_demo_roster()
-            st.session_state["_roster_src"] = "시연용 더미"
-            st.rerun()
+            c_a, c_b = st.columns(2)
+            if c_a.button("🔄 등록 명부 새로고침", use_container_width=True,
+                          disabled=not W.is_enabled()):
+                W.load_survey.clear()
+                st.session_state.pop("_roster", None)
+                st.session_state.pop("_roster_src", None)
+                st.rerun()
+            if c_b.button("🟡 시연용 더미로 전환", use_container_width=True):
+                st.session_state["_roster"] = T.make_demo_roster()
+                st.session_state["_roster_src"] = "시연용 더미"
+                st.rerun()
 
-        up = st.file_uploader(
-            "보건 정보 CSV (선택) — 등록 명부에 성명으로 병합", type="csv",
-            help="컬럼: 성명, 만성질환, 온열질환기왕력, 약물복용, "
-                 "알코올의존, 일시적건강저하 (연령·옥외작업도 있으면 반영)")
-        if up is not None:
-            try:
-                merged = T.merge_health(roster, pd.read_csv(up))
-                if not merged.equals(roster):
-                    st.session_state["_roster"] = merged
-                    st.session_state["_roster_src"] = roster_src + " + 보건 CSV"
-                    st.rerun()
-                st.success(f"보건 정보 병합 완료 · {len(merged)}명")
-            except Exception as e:
-                st.error(f"CSV 읽기 실패 → 기존 명부 유지\n\n`{e}`")
+            up = st.file_uploader(
+                "보건 정보 CSV (선택) — 등록 명부에 성명으로 병합", type="csv",
+                help="컬럼: 성명, 만성질환, 온열질환기왕력, 약물복용, "
+                     "알코올의존, 일시적건강저하 (연령·옥외작업도 있으면 반영)")
+            if up is not None:
+                try:
+                    merged = T.merge_health(roster, pd.read_csv(up))
+                    if not merged.equals(roster):
+                        st.session_state["_roster"] = merged
+                        st.session_state["_roster_src"] = roster_src + " + 보건 CSV"
+                        st.rerun()
+                    st.success(f"보건 정보 병합 완료 · {len(merged)}명")
+                except Exception as e:
+                    st.error(f"CSV 읽기 실패 → 기존 명부 유지\n\n`{e}`")
 
-        st.caption("ℹ️ 근로자 앱 등록으로 자동 판정되는 항목: "
-                   "**③고령 · ⑥고강도작업 · ⑦신규배치 · 열순응 %**")
-        st.caption("ℹ️ 질환·약물 등 민감군 ①②④⑤는 등록에서 받지 않습니다. "
-                   "보건관리자가 관리하는 CSV를 위에 올리면 병합됩니다. "
-                   "(산업안전보건법 제132조제2항 — 본인 동의 없는 건강정보 공개 금지)")
+            st.caption("ℹ️ 근로자 앱 등록으로 자동 판정: "
+                       "**③고령 · ⑥고강도작업 · ⑦신규배치 · 열순응 %**")
+            st.caption("ℹ️ 질환·약물 등 ①②④⑤는 등록에서 받지 않습니다. "
+                       "보건관리자 CSV를 올리면 병합됩니다. "
+                       "(산업안전보건법 제132조제2항)")
 
-        st.divider()
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
 
     with t8:
