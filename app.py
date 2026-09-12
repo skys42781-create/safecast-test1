@@ -599,21 +599,39 @@ def build_alarms(blocks: pd.DataFrame, lead: int, trigger: str = "ALERT") -> pd.
 # =====================================================================
 
 def block_card(r: pd.Series) -> str:
-    stop = "🚫 옥외작업 중지 권고" if r["stop_work"] else "&nbsp;"
-    dim = "opacity:0.55;" if not r["is_work"] else ""
+    """공정 블록 카드.
+
+    ui.card_list 와 같은 골격을 쓴다. 블록 카드만 온도를 29px로 키우면
+    옆의 목록 카드와 위계가 어긋나 화면이 들쭉날쭉해 보인다.
+    """
+    dim = "opacity:.5;" if not r["is_work"] else ""
+    stop = ('<div style="font-size:12px;color:#B91C1C;font-weight:600;'
+            'margin-top:6px">🚫 옥외작업 중지 권고</div>'
+            if r["stop_work"] else "")
     return f"""
-<div style="border-left:8px solid {r['color']};background:#FAFAFA;{dim}
-            padding:12px 16px;border-radius:8px;margin-bottom:9px;">
-  <div style="font-size:12px;color:#666;">{r['start']:%H:%M} ~ {r['end']:%H:%M}</div>
-  <div style="font-size:17px;font-weight:700;">{r['block_name']}</div>
-  <div style="font-size:29px;font-weight:800;color:{r['color']};line-height:1.15;">
-      {r['at_rep']}℃</div>
-  <div style="font-size:13px;color:{r['color']};font-weight:600;">
-      {r['tier_label']} · {r['legal']}</div>
-  <div style="font-size:11.5px;color:#888;margin-top:5px;">
-      기온 {r['ta_max']}℃ / 습도 {r['rh_mean']}% ·
-      블록 내 최고 {r['at_max']}℃({r['peak_hour']}시) vs 평균 {r['at_mean']}℃</div>
-  <div style="font-size:12.5px;color:#B91C1C;font-weight:600;">{stop}</div>
+<div style="border-left:3px solid {r['color']};{dim}
+            background:var(--secondary-background-color);
+            padding:13px 16px;border-radius:16px;margin-bottom:8px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <div>
+      <div style="font-size:14.5px;font-weight:700;letter-spacing:-.3px;">
+          {r['block_name']}</div>
+      <div style="font-size:12.5px;opacity:.62;margin-top:2px;">
+          {r['start']:%H:%M} ~ {r['end']:%H:%M}</div>
+    </div>
+    <div style="text-align:right;flex:none">
+      <div style="font-size:22px;font-weight:800;color:{r['color']};
+                  line-height:1.1;letter-spacing:-.6px;">{r['at_rep']}℃</div>
+      <div style="font-size:11.5px;font-weight:700;color:#fff;
+                  background:{r['color']};padding:3px 10px;border-radius:999px;
+                  display:inline-block;margin-top:4px;white-space:nowrap;">
+          {r['tier_label']}</div>
+    </div>
+  </div>
+  <div style="font-size:12px;opacity:.58;margin-top:7px;line-height:1.5">
+      기온 {r['ta_max']}℃ · 습도 {r['rh_mean']}% ·
+      최고 {r['at_max']}℃({r['peak_hour']}시) / 평균 {r['at_mean']}℃</div>
+  {stop}
 </div>"""
 
 
