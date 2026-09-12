@@ -769,8 +769,10 @@ def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
 
     with tab1:
         st.caption("아침 조회에서 화면에 띄우는 표 — 질환명·상세 사유 미표시")
-        st.dataframe(public_view(tbm), hide_index=True, use_container_width=True,
-                     height=420)
+        import ui as _UI
+        _UI.df_cards(public_view(tbm), title="성명", badge="관리등급",
+                     meta=["공종"], body="조치사항",
+                     empty="해당 등급에서 관리 대상자가 없습니다.")
         st.download_button("📥 TBM 명단 CSV",
                            public_view(tbm).to_csv(index=False).encode("utf-8-sig"),
                            file_name="TBM_명단.csv", mime="text/csv")

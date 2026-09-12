@@ -427,7 +427,13 @@ GH_BRANCH = "main"''', language="toml")
         # 미확인이 있으면 열어 두고, 없으면 접는다.
         # 확인이 필요한 상태를 놓치지 않게 하되 평소엔 화면을 비운다.
         with st.expander(f"신고 내역 · {len(view)}건", expanded=bool(pending)):
-            st.dataframe(rv, hide_index=True, use_container_width=True)
+            import ui as _UI
+            _rv = rv.copy()
+            if "증상개수" in _rv.columns:
+                _rv["증상"] = _rv["증상개수"].astype(str) + "개"
+            _UI.df_cards(_rv, title="이름", badge="처리상태",
+                         meta=["시각", "소속", "작업구역", "증상"],
+                         empty="신고가 없습니다.")
 
         if not view.empty:
             st.markdown("##### 처리상태 변경")
@@ -460,8 +466,10 @@ GH_BRANCH = "main"''', language="toml")
         if "생년월일" in view.columns:
             view["생년월일"] = view["생년월일"].astype(str).str[:4] + "****"
         with st.expander(f"👷 등록 근로자 · {len(sv)}명", expanded=False):
-            st.dataframe(view, hide_index=True, use_container_width=True,
-                         height=min(320, 40 + 35 * len(view)))
+            import ui as _UI
+            _UI.df_cards(view, title="이름",
+                         meta=["소속", "작업구역", "공종", "연령"],
+                         empty="등록된 근로자가 없습니다.", limit=30)
             st.download_button("📥 등록 명부 CSV (TBM 명단 업로드용)",
                                sv.to_csv(index=False).encode("utf-8-sig"),
                                file_name=f"근로자명부_{datetime.now():%Y%m%d}.csv",

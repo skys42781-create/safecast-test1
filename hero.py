@@ -37,9 +37,13 @@ TIER_COLORS = {
 
 PULSE_TIERS = {"심각", "위험"}
 
-BASE_H = 296        # 히어로 본체
-STAT_H = 92         # 지표 줄
-PANEL_MAX = 240     # 근거 패널 최대 높이
+BASE_H = 292        # 히어로 본체
+STAT_H = 88         # 지표 줄
+
+# ⓘ 패널은 카드 위에 겹쳐 띄운다.
+# 아래로 펼치면 그만큼 iframe 높이를 항상 비워둬야 해서
+# 패널을 닫아 둔 평소에도 큰 빈 공간이 남는다.
+PANEL_MAX = 268     # 패널 자체의 최대 높이 (iframe 높이에는 더하지 않는다)
 
 
 def _color(tier_short: str) -> dict:
@@ -80,8 +84,7 @@ def render_hero(*, tier_short: str, tier_legal: str,
         "alerts": int(alerts), "demo": bool(demo),
     }, ensure_ascii=False)
 
-    # 패널이 카드 밖으로 나가면 iframe에 잘리므로 높이를 미리 확보한다.
-    h = BASE_H + (STAT_H if sl else 0) + (PANEL_MAX if dl else 0)
+    h = BASE_H + (STAT_H if sl else 0)
     html = (_HTML.replace("__DATA__", payload)
                  .replace("__PMAX__", str(PANEL_MAX - 60)))
     components.html(html, height=h, scrolling=False)
@@ -158,11 +161,12 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
 .stat .v{font-size:21px;font-weight:800;margin-top:3px;letter-spacing:-.5px}
 .stat .n{font-size:11.5px;color:#8B95A1;margin-top:2px}
 
-.panel{margin-top:10px;background:#fff;border-radius:20px;overflow:hidden;
-  display:grid;grid-template-rows:0fr;
-  transition:grid-template-rows .32s cubic-bezier(.22,1.28,.36,1)}
-.panel.on{grid-template-rows:1fr}
-.pin{overflow:hidden}
+.panel{position:absolute;top:62px;right:22px;z-index:20;
+  width:min(360px,calc(100% - 44px));background:#fff;border-radius:20px;
+  box-shadow:0 12px 32px rgba(0,0,0,.22);
+  opacity:0;transform:scale(.94) translateY(-8px);pointer-events:none;
+  transition:opacity .2s,transform .24s cubic-bezier(.34,1.56,.64,1)}
+.panel.on{opacity:1;transform:none;pointer-events:auto}
 .pbody{padding:16px 18px;max-height:__PMAX__px;overflow-y:auto;color:#191F28}
 .pbody h4{font-size:11.5px;font-weight:700;color:#8B95A1;margin-bottom:8px;
   letter-spacing:.4px}
@@ -172,6 +176,7 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 
+<div style="position:relative">
 <div class="hero" id="hero">
   <div class="top">
     <div>
@@ -199,9 +204,10 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
 
 <div class="stats" id="stats"></div>
 
-<div class="panel" id="panel"><div class="pin"><div class="pbody">
+<div class="panel" id="panel"><div class="pbody">
   <h4>측정 출처 · 보정 근거</h4><ul id="plist"></ul>
-</div></div></div>
+</div></div>
+</div>
 
 <script>
 const D = __DATA__;
@@ -224,7 +230,8 @@ if (D.stats && D.stats.length) {
   }).join('');
 }
 
-/* 패널은 카드 아래로 펼친다. 위로 띄우면 iframe 경계에 잘린다. */
+/* 패널은 카드 위에 겹쳐 띄운다. 아래로 펼치면 닫힌 평소에도
+   iframe 높이를 비워둬야 해서 큰 빈 공간이 남는다. */
 const info = document.getElementById('info');
 const panel = document.getElementById('panel');
 if (D.details && D.details.length) {
@@ -234,10 +241,15 @@ if (D.details && D.details.length) {
     info.insertAdjacentHTML('beforeend',
       '<span class="nbadge">' + (D.alerts > 9 ? '9+' : D.alerts) + '</span>');
   }
-  info.addEventListener('click', function(){
+  info.addEventListener('click', function(e){
+    e.stopPropagation();
     panel.classList.toggle('on'); info.classList.toggle('on');
     const b = info.querySelector('.nbadge'); if (b) b.remove();
   });
+  document.addEventListener('click', function(){
+    panel.classList.remove('on'); info.classList.remove('on');
+  });
+  panel.addEventListener('click', function(e){ e.stopPropagation(); });
 } else { info.style.display = 'none'; }
 
 const tempEl = document.getElementById('temp');

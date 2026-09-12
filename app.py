@@ -37,6 +37,7 @@ import snapshot as SNAP
 import stations as S
 import tbm as T
 import theme as TH
+import ui as UI
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -1307,11 +1308,10 @@ def main() -> None:
             if not ba.empty:
                 with st.expander(f"🚧 블록 진입 알람 · {len(ba)}건", expanded=True):
                     st.caption("등급이 올라가는 구간에 들어가기 전 사전 통보")
-                    st.dataframe(
-                        ba[["발송시각", "대상 블록", "블록 시작", "등급", "체감온도"]],
-                        hide_index=True, use_container_width=True)
+                    UI.df_cards(ba, title="발송시각", badge="등급",
+                                meta=["대상 블록", "블록 시작", "체감온도"])
                     for _, a in ba.iterrows():
-                        st.caption(f"**{a['발송시각']} → {a['대상 블록']} 진입**")
+                        st.caption(f"**{a['발송시각']} → {a['대상 블록']}** 전달 문구")
                         st.code(a["메시지"], language=None)
 
             with st.expander("💧 휴식 알람", expanded=False):
