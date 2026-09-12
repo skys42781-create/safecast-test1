@@ -154,6 +154,53 @@ h1, h2, h3, h4, h5 { letter-spacing: -0.6px; font-weight: 700; }
 /* ---------- 코드 블록 ---------- */
 .stCode, pre { border-radius: 14px !important; font-size: 12.5px !important; }
 
+/* ---------- 배경에 층을 만든다 ---------- */
+/* 배경과 카드가 모두 흰색이면 층이 안 보여 화면이 평평해진다. */
+.stApp { background: #F2F4F6; }
+@media (prefers-color-scheme: dark) { .stApp { background: #14161A; } }
+section[data-testid="stSidebar"] { background: rgba(255,255,255,.55); }
+
+/* ---------- 첫 화면 요약 그리드 ---------- */
+.sm-grid {
+  display: grid; gap: 10px; margin: 4px 0 6px;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+}
+.sm-card {
+  background: var(--background-color); border-radius: 18px;
+  padding: 15px 17px; box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  animation: smIn .55s cubic-bezier(.22,1.28,.36,1) both;
+  transition: transform .2s cubic-bezier(.34,1.56,.64,1), box-shadow .2s;
+}
+.sm-card:hover {
+  transform: translateY(-3px); box-shadow: 0 8px 22px rgba(0,0,0,.10);
+}
+.sm-l { font-size: 11.5px; opacity: .6; font-weight: 500; }
+.sm-v {
+  font-size: 25px; font-weight: 800; letter-spacing: -1px;
+  line-height: 1.15; margin-top: 5px;
+}
+.sm-n { font-size: 11.5px; opacity: .58; margin-top: 3px; line-height: 1.45; }
+@keyframes smIn {
+  from { opacity: 0; transform: translateY(14px) scale(.96); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---------- 섹션 제목 ---------- */
+.sec {
+  display: flex; align-items: baseline; gap: 9px;
+  margin: 22px 0 10px;
+}
+.sec-t { font-size: 15.5px; font-weight: 700; letter-spacing: -.4px; }
+.sec-n { font-size: 12px; opacity: .55; }
+
+/* ---------- 카드 등장 ---------- */
+/* 콘텐츠가 순서대로 나타나면 화면이 살아 있다는 인상을 준다. */
+div[data-testid="stExpander"],
+div[data-testid="stMetric"] {
+  animation: smIn .5s cubic-bezier(.22,1.28,.36,1) both;
+}
+div[data-testid="stMetric"] { box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }

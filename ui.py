@@ -119,3 +119,41 @@ def stat_row(items: list[tuple[str, str]]) -> None:
         f'background:var(--secondary-background-color);border-radius:16px;'
         f'padding:14px 18px;margin-bottom:10px">{cells}</div>',
         unsafe_allow_html=True)
+
+
+def summary_grid(cards: list[dict]) -> None:
+    """첫 화면 요약. 탭을 누르지 않아도 오늘 무슨 일이 있는지 보이게 한다.
+
+    [왜 필요한가]
+      핵심 정보가 탭 일곱 개에 흩어져 있으면, 화면을 처음 본 사람에게는
+      "카드 하나 있는 앱"으로 보인다. 관리자도 아침에 탭을 하나씩 눌러볼
+      게 아니라 한눈에 파악해야 한다.
+
+    cards: [{"icon": "🚧", "label": "다음 알람", "value": "13:40",
+             "note": "피크 구간 진입", "accent": "#B91C1C"}]
+    """
+    if not cards:
+        return
+    cells = []
+    for i, c in enumerate(cards):
+        col = c.get("accent") or "#8B95A1"
+        cells.append(
+            f'<div class="sm-card" style="animation-delay:{0.05 + i*0.07:.2f}s;'
+            f'border-top:3px solid {col}">'
+            f'<div class="sm-l">{_esc(c.get("icon", ""))} '
+            f'{_esc(c.get("label", ""))}</div>'
+            f'<div class="sm-v" style="color:{col}">{_esc(c.get("value", ""))}</div>'
+            + (f'<div class="sm-n">{_esc(c["note"])}</div>'
+               if c.get("note") else '')
+            + '</div>')
+    st.markdown(
+        '<div class="sm-grid">' + "".join(cells) + '</div>',
+        unsafe_allow_html=True)
+
+
+def section(title: str, note: str = "") -> None:
+    """섹션 제목. h5보다 가볍고 위계가 분명하다."""
+    st.markdown(
+        f'<div class="sec"><span class="sec-t">{_esc(title)}</span>'
+        + (f'<span class="sec-n">{_esc(note)}</span>' if note else '')
+        + '</div>', unsafe_allow_html=True)

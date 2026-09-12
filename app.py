@@ -1294,6 +1294,69 @@ def main() -> None:
 
     _rtab = f"🚨 신고 ({_alerts})" if _alerts else "🚨 신고"
 
+    # ---------- 첫 화면 요약 ----------
+    # 핵심이 탭 일곱 개에 흩어져 있으면 전체를 파악하는 데 일곱 번을 눌러야
+    # 한다. 관리자는 아침에 한눈에 봐야 하고, 처음 보는 사람에게도
+    # 시스템이 무엇을 하는지 스크롤 한 번에 드러나야 한다.
+    _blk_now = build_blocks(today_df, today, conservative) \
+        if not today_df.empty else pd.DataFrame()
+    _al_now = build_alarms(_blk_now, lead) if not _blk_now.empty \
+        else pd.DataFrame()
+    _tmr_max = float(tmr_df["at"].max()) if not tmr_df.empty else None
+    _tmr_tier = classify(_tmr_max) if _tmr_max is not None else None
+
+    _cards = []
+
+    # 다음 알람 — 지금 당장 할 일
+    if not _al_now.empty:
+        _nx = _al_now.iloc[0]
+        _cards.append({"icon": "🚧", "label": "다음 알람",
+                       "value": str(_nx["발송시각"]),
+                       "note": f"{_nx['대상 블록']} 진입 · {_nx['등급']}",
+                       "accent": classify(float(_nx["체감온도"]
+                                                .replace("℃", ""))).color
+                       if isinstance(_nx["체감온도"], str) else day_tier.color})
+    else:
+        _cards.append({"icon": "🚧", "label": "다음 알람", "value": "없음",
+                       "note": "사전 통보 대상 구간 없음", "accent": "#8B95A1"})
+
+    # 관리 대상 — 누구를 챙길지
+    _tg = len(day_tbm) if not day_tbm.empty else 0
+    _cards.append({"icon": "👷", "label": "관리 대상",
+                   "value": f"{_tg} / {len(roster)}명",
+                   "note": "민감군 · 열순응 대상",
+                   "accent": "#C2410C" if _tg else "#8B95A1"})
+
+    # 미확인 신고 — 놓치면 안 되는 것
+    _cards.append({"icon": "🚨", "label": "미확인 신고",
+                   "value": f"{_alerts}건",
+                   "note": "즉시 현장 확인 필요" if _alerts else "접수 없음",
+                   "accent": "#DC2626" if _alerts else "#15803D"})
+
+    # 내일 — 사전 계획
+    if _tmr_tier is not None:
+        _up = _tmr_max > day_max
+        _cards.append({"icon": "📅", "label": "내일 최고",
+                       "value": f"{_tmr_max:.1f}℃",
+                       "note": (f"{_tmr_tier.short} · 오늘보다 "
+                                f"{abs(_tmr_max - day_max):.1f}℃ "
+                                f"{'높음' if _up else '낮음'}"),
+                       "accent": _tmr_tier.color})
+
+    UI.summary_grid(_cards)
+
+    UI.section("오늘 공정 블록",
+               f"{len(_blk_now[_blk_now['is_work']]) if not _blk_now.empty else 0}개 작업 구간 · 블록 내 최고값 기준")
+    if _blk_now.empty:
+        st.caption("오늘 잔여 예보가 없습니다.")
+    else:
+        _bc = st.columns(len(_blk_now))
+        for _i, (_, _r) in enumerate(_blk_now.iterrows()):
+            with _bc[_i]:
+                st.markdown(block_card(_r), unsafe_allow_html=True)
+
+    UI.section("상세", "탭을 눌러 항목별로 확인합니다")
+
     t1, t2, t6, t4, t8, t7, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
          "⏰ 알람", "👷 TBM 타겟 명단", _rtab, "📝 조치 기록", "📖 법적 근거"])
