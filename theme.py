@@ -23,9 +23,12 @@ from __future__ import annotations
 
 import streamlit as st
 
+# 폰트는 @import 로 CSS 안에서 불러온다.
+# <link> 와 <style> 을 한 markdown 호출에 함께 넣으면 Streamlit 이
+# 뒤쪽 <style> 을 파싱하지 못하고 CSS 원문을 화면에 그대로 출력한다.
 CSS = """
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap');
 /* ---------- 폰트 ---------- */
 html, body, [class*="css"], .stApp, button, input, textarea, select {
   font-family: 'Noto Sans KR', -apple-system, system-ui, sans-serif !important;
