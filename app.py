@@ -36,6 +36,7 @@ import worker as W
 import snapshot as SNAP
 import stations as S
 import tbm as T
+import theme as TH
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -781,17 +782,9 @@ def render_logo() -> None:
 def main() -> None:
     st.set_page_config(page_title="SAFECASTY", page_icon="🏗️", layout="wide")
 
-    # 한 화면에 표가 여러 개 펼쳐져 있으면 무엇을 먼저 봐야 할지 알 수 없다.
-    # 접어 두고 필요한 것만 열게 하되, 헤더에 건수를 붙여 열지 않고도
-    # 확인이 필요한지 판단할 수 있게 한다.
-    st.markdown("""<style>
-    div[data-testid="stExpander"]{border:none;border-radius:18px;
-      background:var(--secondary-background-color);margin-bottom:10px}
-    div[data-testid="stExpander"] summary{padding:13px 18px;font-weight:600}
-    div[data-testid="stExpander"] summary:hover{background:rgba(128,128,128,.06)}
-    div[data-testid="stExpander"] div[data-testid="stExpanderDetails"]{
-      padding:2px 18px 14px}
-    </style>""", unsafe_allow_html=True)
+    # Streamlit 기본 위젯을 모바일 앱 톤으로 맞춘다.
+    # 히어로만 카드형이면 대비가 커져 오히려 아래쪽이 낡아 보인다.
+    TH.apply()
 
     # secrets.toml 파일 자체가 없으면 st.secrets 접근이 예외를 던진다 (로컬 첫 실행)
     try:
