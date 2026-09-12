@@ -812,13 +812,23 @@ def main() -> None:
     except Exception:
         kakao = kma = ""
 
+    render_logo()
+
+    # ---- 역할 선택 ----
+    # 역할이 다르면 볼 화면도 다르다. 사이드바 라디오는 열어서 찾아야 하고,
+    # QR로 들어온 근로자에게 관제 설정이 잔뜩 보이는 화면이 먼저 뜬다.
+    _role = UI.mode_gate()
+    if _role is None:
+        st.stop()
+    mode = "🛡️ 관리자" if _role == "admin" else "👷 근로자"
+
     with st.sidebar:
+        UI.mode_switch(_role)
+        st.divider()
         st.header("⚙️ 관제 설정")
 
-        # ---- 모드 ----
         # Streamlit은 사용자별 인증이 없어 URL을 아는 사람은 모두 접근할 수 있다.
         # 민감군 명단이 노출되지 않도록 관리자 모드에 비밀번호를 건다.
-        mode = st.radio("모드", ["👷 근로자", "🛡️ 관리자"], horizontal=True)
         is_admin = False
         if mode.startswith("🛡️"):
             try:
@@ -898,7 +908,6 @@ def main() -> None:
         if not demo and not kma:
             st.error("secrets.toml에 KMA_KEY를 등록하세요.")
 
-    render_logo()
     st.caption("건설현장 폭염 관제 시스템 · 산업안전보건기준에 관한 규칙(2025.7 개정) 기준")
 
     # ---------- 위치 ----------

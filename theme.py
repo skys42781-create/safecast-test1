@@ -185,6 +185,26 @@ section[data-testid="stSidebar"] { background: rgba(255,255,255,.55); }
   to   { opacity: 1; transform: none; }
 }
 
+/* ---------- 진입 게이트 ---------- */
+.gate { text-align: center; margin: 40px 0 26px;
+  animation: smIn .6s cubic-bezier(.22,1.28,.36,1) both; }
+.gate-q { font-size: 25px; font-weight: 800; letter-spacing: -1px; }
+.gate-n { font-size: 13.5px; opacity: .58; margin-top: 7px; }
+.gate-card {
+  background: var(--background-color); border-radius: 22px;
+  padding: 30px 24px 24px; text-align: center; margin-bottom: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+  animation: smIn .55s cubic-bezier(.22,1.28,.36,1) both;
+  transition: transform .22s cubic-bezier(.34,1.56,.64,1), box-shadow .22s;
+}
+.gate-card:hover {
+  transform: translateY(-4px); box-shadow: 0 14px 34px rgba(0,0,0,.12);
+}
+.gate-ic { font-size: 44px; line-height: 1; }
+.gate-t { font-size: 20px; font-weight: 800; margin-top: 12px;
+  letter-spacing: -.6px; }
+.gate-d { font-size: 12.5px; opacity: .6; margin-top: 7px; line-height: 1.55; }
+
 /* ---------- 섹션 제목 ---------- */
 .sec {
   display: flex; align-items: baseline; gap: 9px;

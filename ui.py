@@ -157,3 +157,68 @@ def section(title: str, note: str = "") -> None:
         f'<div class="sec"><span class="sec-t">{_esc(title)}</span>'
         + (f'<span class="sec-n">{_esc(note)}</span>' if note else '')
         + '</div>', unsafe_allow_html=True)
+
+
+# =====================================================================
+# 진입 게이트
+# =====================================================================
+
+def mode_gate() -> str | None:
+    """처음 접속하면 역할을 먼저 묻는다.
+
+    [왜 게이트를 두는가]
+      사이드바 라디오는 열어서 찾아야 하고, 현장에서 QR로 들어온 근로자에게는
+      관제 설정이 잔뜩 보이는 화면이 먼저 뜬다. 역할이 다르면 볼 화면도
+      달라야 하므로, 선택을 화면 앞으로 끌어낸다.
+
+    반환: "worker" | "admin" | None (아직 선택 안 함)
+    """
+    picked = st.session_state.get("_mode")
+    if picked:
+        return picked
+
+    st.markdown("""
+<div class="gate">
+  <div class="gate-q">어느 쪽으로 접속하시나요?</div>
+  <div class="gate-n">역할에 따라 필요한 화면만 표시됩니다</div>
+</div>""", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("""
+<div class="gate-card">
+  <div class="gate-ic">👷</div>
+  <div class="gate-t">근로자</div>
+  <div class="gate-d">오늘 등급 확인 · 자각증상 자가진단 · 이상 신고</div>
+</div>""", unsafe_allow_html=True)
+        if st.button("근로자로 시작", use_container_width=True,
+                     key="_g_worker"):
+            st.session_state["_mode"] = "worker"
+            st.rerun()
+    with c2:
+        st.markdown("""
+<div class="gate-card">
+  <div class="gate-ic">🛡️</div>
+  <div class="gate-t">관리자</div>
+  <div class="gate-d">휴식 계획 · 알람 · TBM 명단 · 조치 기록</div>
+</div>""", unsafe_allow_html=True)
+        if st.button("관리자로 시작", use_container_width=True,
+                     type="primary", key="_g_admin"):
+            st.session_state["_mode"] = "admin"
+            st.rerun()
+
+    st.caption("관리자 모드는 비밀번호가 필요합니다. "
+               "민감군 명단이 포함되므로 접근을 제한합니다.")
+    return None
+
+
+def mode_switch(current: str) -> None:
+    """사이드바 상단에 현재 역할과 전환 버튼만 남긴다."""
+    label = "👷 근로자" if current == "worker" else "🛡️ 관리자"
+    st.markdown(f'<div style="font-size:13px;font-weight:700;'
+                f'padding:8px 0 2px">{label} 모드</div>',
+                unsafe_allow_html=True)
+    if st.button("역할 변경", use_container_width=True, key="_m_switch"):
+        for k in ("_mode", "_worker"):
+            st.session_state.pop(k, None)
+        st.rerun()
