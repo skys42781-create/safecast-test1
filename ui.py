@@ -222,3 +222,74 @@ def mode_switch(current: str) -> None:
         for k in ("_mode", "_worker"):
             st.session_state.pop(k, None)
         st.rerun()
+
+
+# =====================================================================
+# 도면 패널 — 제목 + 행 격자
+# =====================================================================
+
+def panel_open(title: str, note: str = "") -> str:
+    """도면 패널 여는 태그. panel_close() 와 짝으로 쓴다."""
+    return (
+        '<div style="border:1px solid rgba(29,31,32,.16);background:#fff;'
+        'padding:15px 17px 13px;height:100%">'
+        '<div style="display:flex;align-items:baseline;'
+        'justify-content:space-between;gap:10px;margin-bottom:11px">'
+        f'<span style="font-weight:600;font-size:14px;letter-spacing:.04em">'
+        f'{_esc(title)}</span>'
+        + (f'<span style="font-size:11px;color:#7A7A7D">{_esc(note)}</span>'
+           if note else '')
+        + '</div><div style="display:flex;flex-direction:column;gap:7px">')
+
+
+def panel_close() -> str:
+    return '</div></div>'
+
+
+def grid_row(lead: str, body: str, tail: str = "", *,
+             accent: str = "", cols: str = "62px 1fr 76px",
+             lead_size: int = 18, urgent: bool = False,
+             tail_filled: bool = False) -> str:
+    """한 줄 = 하나의 항목. 시각·내용·상태가 같은 축에 정렬된다.
+
+    표보다 읽기 쉽고 카드보다 밀도가 높다. 목록이 길어져도 세로로
+    늘어지지 않는 게 요점이다.
+    """
+    col = accent or "#1D1F20"
+    border = (f'1px solid {col}' if urgent else '1px solid rgba(29,31,32,.14)')
+    bg = (f'background:{col}0D;' if urgent else
+          'background:rgba(29,31,32,.02);')
+
+    tail_html = ""
+    if tail:
+        if tail_filled:
+            tail_html = (f'<span style="font-size:10.5px;font-weight:700;'
+                         f'color:#F2F2F3;background:{col};padding:2px 6px;'
+                         f'text-align:center">{_esc(tail)}</span>')
+        else:
+            tail_html = (f'<span style="font-size:10.5px;color:{col};'
+                         f'border:1px solid {col};padding:2px 6px;'
+                         f'text-align:center">{_esc(tail)}</span>')
+
+    return (
+        f'<div style="display:grid;grid-template-columns:{cols};gap:11px;'
+        f'align-items:center;padding:9px 12px;border:{border};{bg}">'
+        f'<span style="font-weight:600;font-size:{lead_size}px;'
+        f'font-variant-numeric:tabular-nums;color:{col}">{_esc(lead)}</span>'
+        f'<span style="font-size:12px;line-height:1.5">{_esc(body)}</span>'
+        + tail_html + '</div>')
+
+
+def list_row(name: str, detail: str, tail: str = "", accent: str = "") -> str:
+    """명단 행 — 좌측 색선으로 등급을 표시한다."""
+    col = accent or "#7A7A7D"
+    return (
+        f'<div style="display:grid;grid-template-columns:76px 1fr 88px;gap:10px;'
+        f'padding:8px 12px;border:1px solid rgba(29,31,32,.12);'
+        f'border-left:3px solid {col};font-size:12px;align-items:center">'
+        f'<span style="font-weight:600">{_esc(name)}</span>'
+        f'<span style="line-height:1.5">{_esc(detail)}</span>'
+        + (f'<span style="font-weight:600;font-variant-numeric:tabular-nums;'
+           f'color:{col};text-align:right">{_esc(tail)}</span>' if tail else
+           '<span></span>')
+        + '</div>')

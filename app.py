@@ -598,6 +598,13 @@ def build_alarms(blocks: pd.DataFrame, lead: int, trigger: str = "ALERT") -> pd.
 # SECTION 6. UI
 # =====================================================================
 
+# TBM 관리등급을 등급 색으로 옮긴다. 명단에서 색이 곧 우선순위다.
+TIER_BY_LABEL = {
+    "집중관찰": "#B91C1C", "열순응 관리": "#C2410C",
+    "주의 관찰": "#B45309", "관찰": "#B45309",
+}
+
+
 def block_card(r: pd.Series, *, running: bool = False,
                show_basis: bool = True) -> str:
     """공정 블록 카드 — 도면 객체.
@@ -1396,27 +1403,59 @@ def main() -> None:
                 st.markdown(block_card(_r2, running=_run),
                             unsafe_allow_html=True)
 
-    # ---------- 오늘 알람 ----------
-    # 매일 보는 것은 첫 화면에, 가끔 보는 것만 탭에 남긴다.
-    # 탭을 일곱 번 눌러야 전체가 파악되는 구조는 아침에 쓰기 어렵다.
-    UI.section("오늘 알람", f"사전 통보 {lead}분 · 문구 그대로 전파")
-    if _al_now.empty:
-        st.caption("등급이 올라가는 구간이 없어 사전 통보 대상이 없습니다.")
-    else:
-        UI.df_cards(_al_now, title="발송시각", badge="등급",
-                    meta=["대상 블록", "블록 시작", "체감온도"])
-        with st.expander("전달 문구", expanded=False):
+    # ---------- 오늘 알람 · TBM 관리 대상 ----------
+    # 좌우 2단으로 붙인다. 세로로 늘어놓으면 스크롤이 길어지고
+    # 둘 사이 여백이 화면을 비어 보이게 한다.
+    _L, _R = st.columns([1.15, 1], gap="small")
+
+    with _L:
+        _h = [UI.panel_open("오늘 알람", f"사전 통보 {lead}분 · 문구 그대로 전파")]
+        if _al_now.empty:
+            _h.append('<div style="font-size:12px;color:#7A7A7D;padding:6px 2px">'
+                      '등급이 올라가는 구간이 없어 사전 통보 대상이 없습니다.</div>')
+        else:
+            _nowhm = now.strftime("%H:%M")
+            for _, _a in _al_now.head(4).iterrows():
+                _sent = str(_a["발송시각"]) <= _nowhm
+                _tc = tier_by_code(
+                    _a["등급코드"]).color if "등급코드" in _a else day_tier.color
+                _h.append(UI.grid_row(
+                    str(_a["발송시각"]),
+                    f"{_a['대상 블록']} 진입 — 판정 {_a['체감온도']} {_a['등급']}",
+                    "전파 완료" if _sent else "대기",
+                    accent="#15803D" if _sent else _tc,
+                    urgent=not _sent, tail_filled=not _sent))
+        _h.append(UI.panel_close())
+        st.markdown("".join(_h), unsafe_allow_html=True)
+
+    with _R:
+        _h2 = [UI.panel_open("TBM 관리 대상",
+                             "선별·기록만 — 근로 제한 판단은 관리자")]
+        if day_tbm.empty:
+            _h2.append('<div style="font-size:12px;color:#7A7A7D;padding:6px 2px">'
+                       '현재 등급에서 관리 대상자가 없습니다.</div>')
+        else:
+            _pv = T.public_view(day_tbm)
+            for _, _t in _pv.head(4).iterrows():
+                _tcol = TIER_BY_LABEL.get(str(_t["관리등급"]), "#7A7A7D")
+                _h2.append(UI.list_row(
+                    str(_t["성명"]), str(_t["조치사항"])[:34],
+                    str(_t["공종"]), accent=_tcol))
+            if len(_pv) > 4:
+                _h2.append(
+                    f'<div style="font-size:11.5px;color:#7A7A7D;'
+                    f'padding:5px 2px">이 외 {len(_pv) - 4}명 · '
+                    f'38℃ 도달 시 옥외작업 제한 대상 포함</div>')
+        _h2.append(UI.panel_close())
+        st.markdown("".join(_h2), unsafe_allow_html=True)
+
+    with st.expander("알람 전달 문구", expanded=False):
+        if _al_now.empty:
+            st.caption("생성된 알람이 없습니다.")
+        else:
             for _, _a in _al_now.iterrows():
                 st.caption(f"**{_a['발송시각']} · {_a['대상 블록']}**")
                 st.code(_a["메시지"], language=None)
-
-    # ---------- TBM 관리 대상 ----------
-    UI.section("TBM 관리 대상", "선별·기록만 — 근로 제한 판단은 관리자")
-    if day_tbm.empty:
-        st.caption("현재 등급에서 관리 대상자가 없습니다.")
-    else:
-        UI.df_cards(T.public_view(day_tbm), title="성명", badge="관리등급",
-                    meta=["공종"], body="조치사항", limit=6)
 
     UI.section("상세", "항목별 원본과 근거")
 
