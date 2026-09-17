@@ -91,13 +91,14 @@ def render_hero(*, tier_short: str, tier_legal: str,
 
 
 _HTML = r"""
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
+/* iframe 안은 부모 문서와 스타일이 분리되므로 폰트를 따로 불러온다. */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
-.hero{border-radius:28px;padding:24px 26px 20px;color:#fff;position:relative;
+body{font-family:'IBM Plex Sans KR',system-ui,sans-serif;background:transparent}
+.hero{border-radius:2px;padding:24px 26px 20px;color:#fff;position:relative;
   overflow:hidden;animation:rise .6s cubic-bezier(.22,1.28,.36,1) both}
-.hero.pulse::after{content:'';position:absolute;inset:0;border-radius:28px;
+.hero.pulse::after{content:'';position:absolute;inset:0;border-radius:2px;
   background:radial-gradient(circle at 50% 45%,rgba(255,255,255,.20),transparent 62%);
   animation:breathe 2.6s ease-in-out infinite;pointer-events:none}
 @keyframes breathe{0%,100%{opacity:.25}50%{opacity:.85}}
@@ -115,34 +116,36 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
   animation:blink 1.6s ease-in-out infinite}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 .rt{display:flex;align-items:center;gap:8px;flex:none}
-.badge{font-size:12.5px;font-weight:700;padding:6px 14px;border-radius:999px;
-  background:rgba(255,255,255,.20);white-space:nowrap}
-.demo{font-size:11.5px;font-weight:700;padding:5px 11px;border-radius:999px;
+.badge{font-size:11.5px;font-weight:600;padding:5px 12px;border-radius:2px;
+  background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+  letter-spacing:.4px;white-space:nowrap}
+.demo{font-size:11px;font-weight:600;padding:4px 10px;border-radius:2px;
   background:#FDE68A;color:#78350F;white-space:nowrap}
-.info{position:relative;width:26px;height:26px;border-radius:50%;border:none;
+.info{position:relative;width:26px;height:26px;border-radius:2px;
+  border:1px solid rgba(255,255,255,.35);
   cursor:pointer;background:rgba(255,255,255,.20);color:#fff;font-size:13px;
   font-weight:700;font-family:inherit;line-height:1;flex:none;
   transition:transform .18s cubic-bezier(.34,1.56,.64,1),background .18s}
 .info:hover{background:rgba(255,255,255,.34);transform:scale(1.12)}
 .info:active{transform:scale(.92)}
 .info.on{background:rgba(255,255,255,.92);color:#111}
-.nbadge{position:absolute;top:-3px;right:-3px;min-width:16px;height:16px;padding:0 4px;
-  border-radius:999px;background:#EF4444;color:#fff;font-size:10px;font-weight:700;
+.nbadge{position:absolute;top:-5px;right:-5px;min-width:15px;height:15px;padding:0 4px;
+  border-radius:2px;background:#DC2626;color:#fff;font-size:10px;font-weight:700;
   line-height:16px;animation:pop .45s cubic-bezier(.34,1.56,.64,1) both}
 
 .main{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;
   margin:12px 0 2px;position:relative;z-index:2}
-.temp{font-size:58px;font-weight:900;line-height:1;letter-spacing:-2px;
+.temp{font-size:58px;font-weight:600;line-height:1;letter-spacing:-2px;
   font-variant-numeric:tabular-nums}
 .temp.bump{animation:bump .5s cubic-bezier(.34,1.56,.64,1)}
-.unit{font-size:22px;font-weight:700;opacity:.85;margin-bottom:7px}
+.unit{font-size:22px;font-weight:500;opacity:.85;margin-bottom:7px}
 .sub{display:flex;gap:16px;font-size:13.5px;opacity:.9;margin-bottom:9px}
 .sub b{font-weight:700}
 
 .spark{margin-top:8px;height:58px;position:relative;z-index:2;cursor:crosshair}
 .spark svg{width:100%;height:58px;display:block}
-.tip{position:absolute;transform:translate(-50%,-100%);background:rgba(0,0,0,.72);
-  padding:5px 10px;border-radius:10px;font-size:12px;white-space:nowrap;
+.tip{position:absolute;transform:translate(-50%,-100%);background:rgba(0,0,0,.78);
+  padding:4px 9px;border-radius:2px;font-size:12px;white-space:nowrap;
   opacity:0;transition:opacity .16s;pointer-events:none}
 .tip.on{opacity:1}
 .axis{display:flex;justify-content:space-between;font-size:11.5px;opacity:.66;
@@ -153,25 +156,28 @@ body{font-family:'Noto Sans KR',system-ui,sans-serif;background:transparent}
   scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;
   padding-bottom:4px;scrollbar-width:none}
 .stats::-webkit-scrollbar{display:none}
-.stat{flex:1 0 auto;min-width:132px;scroll-snap-align:start;background:#fff;
-  border-radius:18px;padding:13px 16px;color:#191F28;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);
+.stat{flex:1 0 auto;min-width:138px;scroll-snap-align:start;background:#fff;
+  border-radius:2px;padding:13px 16px;color:#1D1F20;
+  border:1px solid rgba(29,31,32,.16);
   animation:rise .5s cubic-bezier(.22,1.28,.36,1) both}
-.stat .l{font-size:11.5px;color:#8B95A1;font-weight:500}
-.stat .v{font-size:21px;font-weight:800;margin-top:3px;letter-spacing:-.5px}
-.stat .n{font-size:11.5px;color:#8B95A1;margin-top:2px}
+.stat .l{font-size:10.5px;color:#7A7A7D;font-weight:500;letter-spacing:.5px;
+  text-transform:uppercase}
+.stat .v{font-size:21px;font-weight:600;margin-top:3px;letter-spacing:-.5px;
+  font-variant-numeric:tabular-nums}
+.stat .n{font-size:11px;color:#7A7A7D;margin-top:2px}
 
 .panel{position:absolute;top:62px;right:22px;z-index:20;
-  width:min(360px,calc(100% - 44px));background:#fff;border-radius:20px;
-  box-shadow:0 12px 32px rgba(0,0,0,.22);
+  width:min(380px,calc(100% - 44px));background:#fff;border-radius:2px;
+  border:1px solid rgba(29,31,32,.22);
+  box-shadow:0 12px 32px rgba(0,0,0,.20);
   opacity:0;transform:scale(.94) translateY(-8px);pointer-events:none;
   transition:opacity .2s,transform .24s cubic-bezier(.34,1.56,.64,1)}
 .panel.on{opacity:1;transform:none;pointer-events:auto}
 .pbody{padding:16px 18px;max-height:__PMAX__px;overflow-y:auto;color:#191F28}
-.pbody h4{font-size:11.5px;font-weight:700;color:#8B95A1;margin-bottom:8px;
+.pbody h4{font-size:10.5px;font-weight:600;color:#7A7A7D;letter-spacing:.8px;margin-bottom:8px;
   letter-spacing:.4px}
-.pbody li{list-style:none;font-size:13px;line-height:1.6;padding:7px 0;
-  border-bottom:1px solid #EEF1F4}
+.pbody li{list-style:none;font-size:12.5px;line-height:1.6;padding:7px 0;
+  border-bottom:1px solid rgba(29,31,32,.09)}
 .pbody li:last-child{border-bottom:none}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>

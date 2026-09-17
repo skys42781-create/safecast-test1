@@ -63,7 +63,7 @@ def card_list(rows: list[dict], *, title: str, meta: list[str],
         return
 
     shown = rows if limit is None else rows[:limit]
-    parts = ['<div style="display:flex;flex-direction:column;gap:8px">']
+    parts = ['<div style="display:flex;flex-direction:column;gap:6px">']
 
     for r in shown:
         bv = _esc(r.get(badge, "")) if badge else ""
@@ -72,20 +72,20 @@ def card_list(rows: list[dict], *, title: str, meta: list[str],
         bd = _esc(r.get(body, "")) if body else ""
 
         parts.append(
-            f'<div style="background:var(--secondary-background-color);'
-            f'border-radius:16px;padding:13px 16px;'
-            f'border-left:3px solid {col}">'
+            f'<div style="background:#fff;border:1px solid rgba(29,31,32,.16);'
+            f'border-left:3px solid {col};border-radius:2px;padding:12px 15px">'
             f'<div style="display:flex;align-items:center;'
             f'justify-content:space-between;gap:10px">'
-            f'<div style="font-size:14.5px;font-weight:700;letter-spacing:-.3px">'
+            f'<div style="font-size:14px;font-weight:600;letter-spacing:-.3px">'
             f'{_esc(r.get(title, ""))}</div>'
-            + (f'<div style="font-size:11.5px;font-weight:700;color:#fff;'
-               f'background:{col};padding:4px 11px;border-radius:999px;'
-               f'white-space:nowrap">{bv}</div>' if bv else "")
+            + (f'<div style="font-size:10.5px;font-weight:600;color:{col};'
+               f'border:1px solid {col};padding:2px 9px;border-radius:2px;'
+               f'letter-spacing:.4px;white-space:nowrap">{bv}</div>'
+               if bv else "")
             + '</div>'
-            + (f'<div style="font-size:12.5px;opacity:.62;margin-top:3px">'
-               f'{ms}</div>' if ms else "")
-            + (f'<div style="font-size:13px;opacity:.9;margin-top:7px;'
+            + (f'<div style="font-size:11.5px;opacity:.55;margin-top:3px;'
+               f'font-variant-numeric:tabular-nums">{ms}</div>' if ms else "")
+            + (f'<div style="font-size:12.5px;opacity:.85;margin-top:6px;'
                f'line-height:1.55">{bd}</div>' if bd else "")
             + '</div>')
 
@@ -111,13 +111,13 @@ def stat_row(items: list[tuple[str, str]]) -> None:
     cells = "".join(
         f'<div style="flex:1 0 auto;min-width:96px">'
         f'<div style="font-size:11.5px;opacity:.6">{_esc(l)}</div>'
-        f'<div style="font-size:19px;font-weight:800;letter-spacing:-.5px;'
+        f'<div style="font-size:19px;font-weight:600;letter-spacing:-.5px;'
         f'margin-top:2px">{_esc(v)}</div></div>'
         for l, v in items)
     st.markdown(
-        f'<div style="display:flex;gap:18px;flex-wrap:wrap;'
-        f'background:var(--secondary-background-color);border-radius:16px;'
-        f'padding:14px 18px;margin-bottom:10px">{cells}</div>',
+        f'<div style="display:flex;gap:20px;flex-wrap:wrap;background:#fff;'
+        f'border:1px solid rgba(29,31,32,.16);border-radius:2px;'
+        f'padding:13px 16px;margin-bottom:8px">{cells}</div>',
         unsafe_allow_html=True)
 
 
@@ -138,8 +138,8 @@ def summary_grid(cards: list[dict]) -> None:
     for i, c in enumerate(cards):
         col = c.get("accent") or "#8B95A1"
         cells.append(
-            f'<div class="sm-card" style="animation-delay:{0.05 + i*0.07:.2f}s;'
-            f'border-top:3px solid {col}">'
+            f'<div class="sm-card" style="animation-delay:{0.04 + i*0.05:.2f}s;'
+            f'border-left:3px solid {col}">'
             f'<div class="sm-l">{_esc(c.get("icon", ""))} '
             f'{_esc(c.get("label", ""))}</div>'
             f'<div class="sm-v" style="color:{col}">{_esc(c.get("value", ""))}</div>'
