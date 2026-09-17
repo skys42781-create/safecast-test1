@@ -598,40 +598,52 @@ def build_alarms(blocks: pd.DataFrame, lead: int, trigger: str = "ALERT") -> pd.
 # SECTION 6. UI
 # =====================================================================
 
-def block_card(r: pd.Series) -> str:
-    """공정 블록 카드.
+def block_card(r: pd.Series, *, running: bool = False,
+               show_basis: bool = True) -> str:
+    """공정 블록 카드 — 도면 객체.
 
-    ui.card_list 와 같은 골격을 쓴다. 블록 카드만 온도를 29px로 키우면
-    옆의 목록 카드와 위계가 어긋나 화면이 들쭉날쭉해 보인다.
+    상단 3px 색선이 등급, 본문은 판정값과 조치, 하단에 근거 조문.
+    진행 중인 블록만 배지를 채우고 그림자를 줘서 지금 어디인지 드러낸다.
     """
-    dim = "opacity:.5;" if not r["is_work"] else ""
-    stop = ('<div style="font-size:12px;color:#B91C1C;font-weight:600;'
-            'margin-top:6px">🚫 옥외작업 중지 권고</div>'
-            if r["stop_work"] else "")
+    col = r["color"]
+    dim = "opacity:.55;" if not r["is_work"] else ""
+    shadow = "box-shadow:0 3px 10px rgba(43,43,45,.16);" if running else ""
+
+    if running:
+        badge = (f'<span style="font-size:11px;font-weight:700;color:#F2F2F3;'
+                 f'background:{col};padding:2px 8px">{r["tier_label"]} · 진행중</span>')
+    else:
+        badge = (f'<span style="font-size:11px;font-weight:700;color:{col};'
+                 f'border:1px solid {col};padding:1px 7px">{r["tier_label"]}</span>')
+
+    val_label = "℃ 판정값" if r["is_work"] else "℃ 참고값"
+    act = str(r.get("action_note", "") or "")
+    rest = str(r.get("rest_note", "") or "")
+    basis = ""
+    if show_basis and r.get("legal"):
+        basis = (f'<div style="margin-top:8px;font-size:11px;color:#98989B">'
+                 f'{r["legal"]}</div>')
+
     return f"""
-<div style="border-left:3px solid {r['color']};{dim}
-            background:var(--secondary-background-color);
-            padding:13px 16px;border-radius:16px;margin-bottom:8px;">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-    <div>
-      <div style="font-size:14.5px;font-weight:700;letter-spacing:-.3px;">
-          {r['block_name']}</div>
-      <div style="font-size:12.5px;opacity:.62;margin-top:2px;">
-          {r['start']:%H:%M} ~ {r['end']:%H:%M}</div>
-    </div>
-    <div style="text-align:right;flex:none">
-      <div style="font-size:22px;font-weight:800;color:{r['color']};
-                  line-height:1.1;letter-spacing:-.6px;">{r['at_rep']}℃</div>
-      <div style="font-size:11.5px;font-weight:700;color:#fff;
-                  background:{r['color']};padding:3px 10px;border-radius:999px;
-                  display:inline-block;margin-top:4px;white-space:nowrap;">
-          {r['tier_label']}</div>
-    </div>
+<div style="border:1px solid rgba(29,31,32,.16);border-top:3px solid {col};
+            background:#fff;padding:15px 15px 13px;{dim}{shadow}">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
+    <span style="font-weight:600;font-size:15px">{r['block_name']}</span>
+    {badge}
   </div>
-  <div style="font-size:12px;opacity:.58;margin-top:7px;line-height:1.5">
-      기온 {r['ta_max']}℃ · 습도 {r['rh_mean']}% ·
-      최고 {r['at_max']}℃({r['peak_hour']}시) / 평균 {r['at_mean']}℃</div>
-  {stop}
+  <div style="font-size:12px;color:#7A7A7D;font-variant-numeric:tabular-nums;
+              margin-top:2px">{r['start']:%H:%M} – {r['end']:%H:%M}</div>
+  <div style="display:flex;align-items:flex-end;gap:6px;margin:9px 0 3px">
+    <span style="font-weight:600;font-size:29px;line-height:1;color:{col};
+                 font-variant-numeric:tabular-nums">{r['at_rep']}</span>
+    <span style="font-size:12.5px;color:#7A7A7D;margin-bottom:3px">{val_label}</span>
+  </div>
+  <div style="margin-top:9px;padding-top:9px;
+              border-top:1px solid rgba(29,31,32,.12);
+              font-size:12px;line-height:1.6">
+    {act}{f'<br><span style="color:#7A7A7D">{rest}</span>' if rest else ''}
+  </div>
+  {basis}
 </div>"""
 
 
@@ -1172,22 +1184,29 @@ def main() -> None:
             _dmax = float(_td["at"].max())
             _dt = classify(_dmax)
             _stop = int(_w["stop_work"].sum())
+            _ph = int(_td.loc[_td["at"].idxmax(), "hour"])
             _stats = [
-                {"label": "오늘 최고 체감온도", "value": f"{_dmax:.1f}℃",
-                 "note": f"{_dt.short} · 기온 대비 +{_dmax - _td['ta'].max():.1f}℃"},
+                {"label": "오늘 최고 체감", "value": f"{_dmax:.1f}℃",
+                 "note": f"{_ph}시 · {_dt.short} 구간"},
                 {"label": "작업중지 블록", "value": f"{_stop} / {len(_w)}",
                  "note": "블록 내 최고값 기준"},
                 {"label": "작업시간 손실률", "value": f"{loss_ratio(_blk, strict)}%",
-                 "note": "법적 의무만" if strict else "의무 + 권고"},
+                 "note": "법적 의무만" if strict else "의무 휴식 + 옥외 중지"},
             ]
+
+        _acts = ct.actions_by(strict)
+        _act_line = f"{_acts[0][1]} — {ct.legal}" if _acts else ""
 
         HERO.render_hero(
             tier_short=ct.short, tier_legal=ct.legal,
             ta=float(cur_ta), rh=float(cur_rh), at=float(cur_at),
             series=_ser, now_hour=now.hour, site_name=name,
+            grid=f"{nx}/{ny}",
+            today_str=f"{now:%Y-%m-%d} ({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
             stamp=(f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
-            corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ 적용"
+            corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
                        if corr.get("applied") else "기상청 원본값"),
+            action_note=_act_line,
             details=_details, stats=_stats, demo=demo,
             alerts=_alerts,
         )
@@ -1361,8 +1380,21 @@ def main() -> None:
     else:
         _bc = st.columns(len(_blk_now))
         for _i, (_, _r) in enumerate(_blk_now.iterrows()):
+            _run = _r["start"] <= now < _r["end"]
+            _sl = rest_slots(_r, strict) if _r["is_work"] else []
+            _rn = ""
+            if _sl:
+                _rn = " · ".join(f"{x['휴식 시작']}–{x['휴식 종료']}"
+                                 for x in _sl[:2])
+            elif _r["is_work"]:
+                _rn = "휴식 미배정 — 조치 선택 필요"
+            _acts2 = tier_by_code(_r["tier_code"]).actions_by(strict)
+            _r2 = _r.copy()
+            _r2["rest_note"] = _rn
+            _r2["action_note"] = _acts2[0][1] if _acts2 else ""
             with _bc[_i]:
-                st.markdown(block_card(_r), unsafe_allow_html=True)
+                st.markdown(block_card(_r2, running=_run),
+                            unsafe_allow_html=True)
 
     # ---------- 오늘 알람 ----------
     # 매일 보는 것은 첫 화면에, 가끔 보는 것만 탭에 남긴다.
