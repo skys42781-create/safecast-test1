@@ -1364,14 +1364,46 @@ def main() -> None:
             with _bc[_i]:
                 st.markdown(block_card(_r), unsafe_allow_html=True)
 
-    UI.section("상세", "탭을 눌러 항목별로 확인합니다")
+    # ---------- 오늘 알람 ----------
+    # 매일 보는 것은 첫 화면에, 가끔 보는 것만 탭에 남긴다.
+    # 탭을 일곱 번 눌러야 전체가 파악되는 구조는 아침에 쓰기 어렵다.
+    UI.section("오늘 알람", f"사전 통보 {lead}분 · 문구 그대로 전파")
+    if _al_now.empty:
+        st.caption("등급이 올라가는 구간이 없어 사전 통보 대상이 없습니다.")
+    else:
+        UI.df_cards(_al_now, title="발송시각", badge="등급",
+                    meta=["대상 블록", "블록 시작", "체감온도"])
+        with st.expander("전달 문구", expanded=False):
+            for _, _a in _al_now.iterrows():
+                st.caption(f"**{_a['발송시각']} · {_a['대상 블록']}**")
+                st.code(_a["메시지"], language=None)
 
-    t1, t2, t6, t4, t8, t7, t3 = st.tabs(
+    # ---------- TBM 관리 대상 ----------
+    UI.section("TBM 관리 대상", "선별·기록만 — 근로 제한 판단은 관리자")
+    if day_tbm.empty:
+        st.caption("현재 등급에서 관리 대상자가 없습니다.")
+    else:
+        UI.df_cards(T.public_view(day_tbm), title="성명", badge="관리등급",
+                    meta=["공종"], body="조치사항", limit=6)
+
+    UI.section("상세", "항목별 원본과 근거")
+
+    t1, t2, t8, t7, t3 = st.tabs(
         [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-         "⏰ 알람", "👷 TBM 타겟 명단", _rtab, "📝 조치 기록", "📖 법적 근거"])
+         _rtab, "📝 조치 기록", "📖 법적 근거"])
 
     with t1:
         C.render_forecast_bias(fbias)
+        _b1 = build_blocks(today_df, today, conservative) \
+            if not today_df.empty else pd.DataFrame()
+        _tbm1 = T.build_tbm(roster, day_tier.code)
+        with st.expander("💧 휴식 알람", expanded=False):
+            T.render_rest_alarm(_b1, _tbm1, lead, extra_min,
+                                lambda b: rest_slots(b, strict),
+                                now.strftime("%H:%M"))
+        with st.expander("🌡️ 열순응 종료 알람", expanded=False):
+            T.render_acclim_alarm(_tbm1, work_start, work_hours, lead,
+                                  now.strftime("%H:%M"))
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
@@ -1385,35 +1417,11 @@ def main() -> None:
         else:
             render_day(tmr_df, tomorrow, conservative, lead, strict)
 
-    with t6:
-        st.caption("블록 진입 · 휴식 · 열순응 종료 알람을 한 곳에서 관리합니다.")
-        _blocks = build_blocks(today_df, today, conservative) \
-            if not today_df.empty \
-            else pd.DataFrame()
-        _tbm = day_tbm
-        if _blocks.empty:
-            st.warning("오늘 잔여 예보가 없습니다.")
-        else:
-            ba = build_alarms(_blocks, lead)
-            if not ba.empty:
-                with st.expander(f"🚧 블록 진입 알람 · {len(ba)}건", expanded=True):
-                    st.caption("등급이 올라가는 구간에 들어가기 전 사전 통보")
-                    UI.df_cards(ba, title="발송시각", badge="등급",
-                                meta=["대상 블록", "블록 시작", "체감온도"])
-                    for _, a in ba.iterrows():
-                        st.caption(f"**{a['발송시각']} → {a['대상 블록']}** 전달 문구")
-                        st.code(a["메시지"], language=None)
+    with t8:
+        W.render_admin()
 
-            with st.expander("💧 휴식 알람", expanded=False):
-                T.render_rest_alarm(_blocks, _tbm, lead, extra_min,
-                                    lambda b: rest_slots(b, strict),
-                                    now.strftime("%H:%M"))
-
-            with st.expander("🌡️ 열순응 종료 알람", expanded=False):
-                T.render_acclim_alarm(_tbm, work_start, work_hours, lead,
-                                      now.strftime("%H:%M"))
-
-    with t4:
+        st.divider()
+        UI.section("TBM 상세", "명부 설정 · 컨디션 체크 · 전체 명단")
         # 명부 교체·병합은 매번 볼 내용이 아니다. 접어 두고 헤더에 현황만 남긴다.
         with st.expander(f"📋 명부 설정 · {roster_src} {len(roster)}명",
                          expanded=False):
@@ -1455,8 +1463,7 @@ def main() -> None:
 
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
 
-    with t8:
-        W.render_admin()
+
 
     with t7:
         _b = build_blocks(today_df, today, conservative) if not today_df.empty \
