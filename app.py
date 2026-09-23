@@ -1033,7 +1033,8 @@ def main() -> None:
                  icon="⚠️")
         st.stop()
 
-    st.success(f"📍 **{name}** · 격자 (nx={nx}, ny={ny}) · {src}")
+    # 현장·격자·출처는 히어로 표제란이 이미 담고 있다. 여기 다시 쓰면
+    # 같은 정보가 두 번 나와 화면만 길어진다.
     SNAP.render_banner(fc_meta, "예보")
     if obs_meta.get("ok"):
         SNAP.render_banner(obs_meta, "실황")
@@ -1416,13 +1417,15 @@ def main() -> None:
         else:
             _nowhm = now.strftime("%H:%M")
             for _, _a in _al_now.head(4).iterrows():
+                # 실제 전파 여부는 기록하지 않는다. 시스템이 스스로
+                # "전파했다"고 쓰면 허위 기록이므로, 시각 경과만 표시한다.
                 _sent = str(_a["발송시각"]) <= _nowhm
                 _tc = tier_by_code(
                     _a["등급코드"]).color if "등급코드" in _a else day_tier.color
                 _h.append(UI.grid_row(
                     str(_a["발송시각"]),
                     f"{_a['대상 블록']} 진입 — 판정 {_a['체감온도']} {_a['등급']}",
-                    "전파 완료" if _sent else "대기",
+                    "시각 경과" if _sent else "발송 예정",
                     accent="#15803D" if _sent else _tc,
                     urgent=not _sent, tail_filled=not _sent))
         _h.append(UI.panel_close())
