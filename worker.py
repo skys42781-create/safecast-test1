@@ -45,6 +45,20 @@ SURVEY_COLS = ["등록시각", "이름", "생년월일", "소속", "작업구역
 REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
                "증상개수", "처리상태"]
 
+# CSV를 읽을 때 반드시 문자열로 읽어야 하는 열.
+#
+# [왜 필요한가]
+#   pandas는 "19880323" 같은 칸을 숫자로 보고 float으로 바꾼다.
+#   그러면 읽고 → 한 줄 더해 → 다시 쓰는 과정에서 기존 행이
+#   19880323.0 으로 변한다. 새로 들어가는 행만 문자열이라
+#   같은 사람이 두 값으로 갈라지고, 이름+생년월일 조회도 어긋난다.
+#   동명이인 구분이 식별의 근거이므로 이건 안전 문제다.
+#
+#   투입일차도 같은 이유로 4가 4.0이 된다. 열순응 제한율 계산에 쓰이는
+#   값이라 화면과 명단에 그대로 노출된다.
+TEXT_COLS = ["이름", "생년월일", "소속", "작업구역", "공종",
+             "투입일차", "복귀자", "처리상태"]
+
 STATUS = ["미확인", "확인함", "조치완료"]
 
 # 충돌(다른 제출이 먼저 커밋됨) 시 재시도 횟수
@@ -109,6 +123,25 @@ def _headers(token: str) -> dict:
 # 읽기 / 쓰기
 # =====================================================================
 
+def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+    """식별에 쓰이는 열을 문자열로 되돌린다.
+
+    이미 19880323.0 으로 저장된 기존 행도 여기서 정리된다.
+    숫자로 읽혀버린 뒤에 고치는 것이므로 소수점 이하를 떼어낸다.
+    """
+    for c in TEXT_COLS:
+        if c not in df.columns:
+            continue
+        # fillna 를 astype 앞뒤로 두 번 건다.
+        #   pandas 2.x 는 astype(str) 이 결측을 "nan" 문자열로 바꾸고,
+        #   3.x 는 결측인 채로 둔다. 어느 쪽에서도 빈 문자열이 되게 한다.
+        col = df[c].fillna("").astype(str).fillna("").str.strip()
+        # 19880323.0 → 19880323 (정수에 .0 이 붙은 경우만)
+        col = col.str.replace(r"^(\d+)\.0$", r"\1", regex=True)
+        df[c] = col.replace({"nan": "", "None": "", "<NA>": "", "NaN": ""})
+    return df
+
+
 def _read(path: str, cols: list[str]) -> tuple[pd.DataFrame, str | None]:
     """CSV 읽기. 반환: (DataFrame, sha). 파일이 없으면 (빈 DF, None)."""
     c = _cfg()
@@ -121,7 +154,13 @@ def _read(path: str, cols: list[str]) -> tuple[pd.DataFrame, str | None]:
         r.raise_for_status()
         js = r.json()
         raw = base64.b64decode(js["content"]).decode("utf-8-sig")
-        df = pd.read_csv(io.StringIO(raw)) if raw.strip() else pd.DataFrame(columns=cols)
+        if raw.strip():
+            # dtype=str 로 읽어 애초에 숫자 변환이 일어나지 않게 한다.
+            # keep_default_na=False 는 빈 칸이 NaN 이 되는 것을 막는다.
+            df = pd.read_csv(io.StringIO(raw), dtype=str, keep_default_na=False)
+            df = _normalize(df)
+        else:
+            df = pd.DataFrame(columns=cols)
         return df, js["sha"]
     except Exception as e:
         st.session_state["_gh_err"] = str(e)[:200]
@@ -154,6 +193,8 @@ def _append(path: str, cols: list[str], row: dict, msg: str) -> bool:
         for c in cols:
             if c not in merged.columns:
                 merged[c] = ""
+        # 새로 붙인 행도 같은 규칙을 거치게 한다.
+        merged = _normalize(merged)
         if _write(path, merged[cols], sha, msg):
             load_survey.clear()
             load_reports.clear()
