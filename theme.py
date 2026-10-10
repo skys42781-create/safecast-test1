@@ -17,6 +17,16 @@ SAFECASTY — 전역 테마 (Blueprint)
   원본 시스템은 Barlow Condensed를 쓰나 한글 글자가 없어, 제목이 한글이면
   fallback으로 떨어져 자간이 어긋난다. IBM Plex Sans KR은 성격이 비슷하면서
   한글을 온전히 담고 있다.
+
+[다크모드를 지원하지 않는 이유]
+  이 화면은 흰 종이 위의 도면이다. 카드 배경을 #fff로 고정해 두었는데
+  보는 사람이 다크모드를 쓰면 Streamlit이 글자만 흰색으로 바꾸어
+  흰 바탕에 흰 글자가 된다. 배경을 고정한 이상 글자색도 함께 고정해야 한다.
+
+  .streamlit/config.toml 에서 base="light" 로 못박고, 여기서는 그 설정이
+  없거나 무시되는 경우에도 글자가 사라지지 않도록 색을 직접 지정한다.
+  표(st.dataframe)는 캔버스로 그려져 CSS가 닿지 않으므로 config.toml 만이
+  유일한 수단이다.
 """
 
 from __future__ import annotations
@@ -40,23 +50,43 @@ CSS = """
   --sc-ink: #1D1F20;
   --sc-ground: #F2F2F3;
   --sc-accent: #5980A6;
-  --sc-line: rgba(29,31,32,.16);
-  --sc-line-soft: rgba(29,31,32,.09);
+  /* 실선 — 도면의 뼈대. 너무 옅으면 표가 안 읽힌다. */
+  --sc-line: rgba(29,31,32,.30);       /* 바깥 테두리 */
+  --sc-line-soft: rgba(29,31,32,.16);  /* 행 구분선 */
+  --sc-rule: rgba(29,31,32,.22);       /* 표 격자 */
+  --sc-head: #E4E6E8;                  /* 표 머리행 */
   --sc-mono: 'IBM Plex Mono', ui-monospace, monospace;
 }
 
 html, body, [class*="css"], .stApp, button, input, textarea, select {
   font-family: 'IBM Plex Sans KR', system-ui, sans-serif !important;
 }
-.stApp { letter-spacing: -0.1px; background: #F2F2F3; }
+/* 브라우저·OS가 다크모드여도 폼 컨트롤이 어두워지지 않게 한다 */
+:root { color-scheme: light; }
+
+/* 배경을 고정했으므로 글자색도 함께 고정한다.
+   하나만 고정하면 다크모드에서 흰 바탕에 흰 글자가 된다. */
+.stApp { letter-spacing: -0.1px; background: #F2F2F3; color: var(--sc-ink); }
+.stApp, .stApp p, .stApp li, .stApp span, .stApp label,
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+.stMarkdown, .stMarkdown *, div[data-testid="stMarkdownContainer"],
+div[data-testid="stMarkdownContainer"] * {
+  color: var(--sc-ink);
+}
+/* 단, 색을 직접 지정한 요소는 건드리지 않는다 — 등급색이 살아야 한다 */
+.stApp [style*="color:"] { color: revert; }
 section[data-testid="stSidebar"] {
   background: #EDEDEE; border-right: 1px solid var(--sc-line);
 }
+section[data-testid="stSidebar"], section[data-testid="stSidebar"] * {
+  color: var(--sc-ink);
+}
+section[data-testid="stSidebar"] [style*="color:"] { color: revert; }
 .block-container { padding-top: 1.8rem; padding-bottom: 3rem; max-width: 1240px; }
 
 /* ---------- 도면 카드 ---------- */
 .bp {
-  position: relative; background: #fff;
+  position: relative; background: #fff; color: var(--sc-ink);
   border: 1px solid var(--sc-line); border-radius: 2px; padding: 14px 16px;
 }
 .bp::before, .bp::after,
@@ -153,13 +183,41 @@ div[data-testid="stExpander"] div[data-testid="stExpanderDetails"] {
   padding: 2px 16px 14px; border-top: 1px solid var(--sc-line-soft);
 }
 
+/* ---------- 표 ----------
+   st.dataframe 은 캔버스로 그려져 셀 격자선까지 CSS로 칠할 수 없다.
+   배경·글자·격자 색은 .streamlit/config.toml 의 테마 값을 따른다.
+   여기서는 바깥 테두리처럼 CSS가 닿는 부분만 또렷하게 만든다. */
 div[data-testid="stDataFrame"] {
   border-radius: 2px; border: 1px solid var(--sc-line); overflow: hidden;
 }
+
+/* 직접 그린 표 — 이쪽은 CSS가 온전히 닿으므로 격자를 분명히 세운다 */
+.sc-table {
+  width: 100%; border-collapse: collapse; background: #fff;
+  border: 1px solid var(--sc-line); font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.sc-table thead th {
+  background: var(--sc-head); color: var(--sc-ink);
+  font-size: 11px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase;
+  text-align: left; padding: 8px 10px;
+  border-bottom: 1px solid var(--sc-line);
+  border-right: 1px solid var(--sc-rule);
+}
+.sc-table tbody td {
+  padding: 8px 10px; color: var(--sc-ink);
+  border-top: 1px solid var(--sc-line-soft);
+  border-right: 1px solid var(--sc-rule);
+}
+.sc-table thead th:last-child, .sc-table tbody td:last-child { border-right: none; }
+/* 줄이 길어져도 눈이 행을 놓치지 않게 한 줄 걸러 옅게 깐다 */
+.sc-table tbody tr:nth-child(even) td { background: rgba(29,31,32,.025); }
+.sc-table tbody tr:hover td { background: #EFF3F7; }
 div[data-testid="stAlert"] {
   border-radius: 2px; border: 1px solid var(--sc-line);
   border-left-width: 3px; padding: 13px 16px; font-size: 13px;
 }
+div[data-testid="stAlert"], div[data-testid="stAlert"] * { color: var(--sc-ink); }
 
 /* ---------- 섹션 제목 ---------- */
 .sec {
@@ -178,7 +236,8 @@ div[data-testid="stAlert"] {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   border: 1px solid var(--sc-line); background: var(--sc-line);
 }
-.sm-card { background: #fff; padding: 14px 16px; animation: bpIn .4s ease both; }
+.sm-card { background: #fff; color: var(--sc-ink); padding: 14px 16px;
+            animation: bpIn .4s ease both; }
 .sm-l {
   font-size: 10.5px; opacity: .55; font-weight: 500; letter-spacing: .6px;
   text-transform: uppercase;
@@ -204,7 +263,8 @@ code, pre, .stCode { font-family: var(--sc-mono) !important; font-size: 12px !im
 .gate-q { font-size: 22px; font-weight: 600; letter-spacing: -.6px; }
 .gate-n { font-size: 12.5px; opacity: .55; margin-top: 7px; }
 .gate-card {
-  position: relative; background: #fff; border: 1px solid var(--sc-line);
+  position: relative; background: #fff; color: var(--sc-ink);
+  border: 1px solid var(--sc-line);
   border-radius: 2px; padding: 28px 22px 22px; text-align: center;
   margin-bottom: 10px; transition: border-color .18s, background .18s;
 }
@@ -223,3 +283,43 @@ code, pre, .stCode { font-family: var(--sc-mono) !important; font-size: 12px !im
 def apply() -> None:
     """페이지 설정 직후 한 번 호출한다."""
     st.markdown(CSS, unsafe_allow_html=True)
+
+
+def table(df, *, align_right: list[str] | None = None) -> None:
+    """DataFrame을 직접 그린 표로 표시한다.
+
+    [왜 st.dataframe 대신인가]
+      st.dataframe 은 캔버스로 그려져 격자선 색을 CSS로 바꿀 수 없고,
+      테마 설정이 어긋나면 표만 어둡게 뜬다. 감사 대응용 기록처럼
+      화면에 그대로 남아야 하는 표는 직접 그리는 편이 확실하다.
+
+      대신 정렬·크기 조절·복사 기능은 없어진다. 사람이 훑고 인쇄하는
+      표에는 문제가 없지만, 열이 아주 많은 자료에는 st.dataframe 이 낫다.
+
+    align_right: 우측 정렬할 열 이름들 (숫자 열)
+    """
+    import html as _h
+
+    if df is None or len(df) == 0:
+        st.caption("표시할 항목이 없습니다.")
+        return
+
+    right = set(align_right or [])
+    cols = list(df.columns)
+
+    head = "".join(
+        f'<th style="text-align:{"right" if c in right else "left"}">'
+        f'{_h.escape(str(c))}</th>' for c in cols)
+
+    body = []
+    for _, row in df.iterrows():
+        cells = "".join(
+            f'<td style="text-align:{"right" if c in right else "left"}">'
+            f'{_h.escape("" if row[c] is None else str(row[c]))}</td>'
+            for c in cols)
+        body.append(f"<tr>{cells}</tr>")
+
+    st.markdown(
+        f'<table class="sc-table"><thead><tr>{head}</tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table>',
+        unsafe_allow_html=True)

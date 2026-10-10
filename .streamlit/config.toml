@@ -1,0 +1,29 @@
+# SAFECASTY — Streamlit 테마 고정
+# =================================
+# [왜 밝은 테마로 고정하는가]
+#   theme.py는 건설 도면 문법(흰 종이 + 가는 실선)을 전제로 만들어졌다.
+#   카드 배경을 #fff로 고정해 두었는데, 보는 사람이 다크모드를 쓰면
+#   Streamlit이 글자만 흰색으로 바꾸어 흰 바탕에 흰 글자가 된다.
+#
+#   또 st.dataframe은 HTML이 아니라 캔버스로 그려지므로 CSS가 닿지 않는다.
+#   표의 배경·글자·격자선은 오직 이 파일의 테마 값만 따른다.
+#   다크모드에서 표만 검게 뜨던 것도 같은 이유다.
+#
+#   대회 시연에서 보는 사람의 OS 설정에 화면이 좌우되면 안 되므로
+#   앱 자체를 밝은 테마로 못박는다.
+
+[theme]
+base = "light"
+
+primaryColor = "#5980A6"              # 스틸블루 — 구조색
+backgroundColor = "#F2F2F3"           # 종이
+secondaryBackgroundColor = "#E4E6E8"  # 표 머리행·사이드바 (종이보다 한 단계 진하게)
+textColor = "#1D1F20"                 # 잉크
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+# 현장에서 파일을 올릴 일이 있으므로 여유를 둔다 (MB)
+maxUploadSize = 20
