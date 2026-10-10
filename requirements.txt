@@ -1,5 +1,18 @@
-streamlit>=1.36
-pandas>=2.0
-numpy>=1.24
-requests>=2.31
-plotly>=5.20
+# SAFECASTY 의존성
+#
+# [왜 상한을 두는가]
+#   theme.py 와 ui.py 는 Streamlit 내부 DOM 선택자를 직접 덮어쓴다.
+#   (div[data-testid="stCheckbox"], [data-baseweb="tab"] 등)
+#   이 구조는 버전이 올라가면 예고 없이 바뀌므로, 상한이 없으면
+#   Streamlit Cloud가 새 버전으로 재배포하는 순간 화면이 깨질 수 있다.
+#
+#   대회 시연 직전에는 아래 streamlit 줄을 지금 돌아가는 버전으로
+#   정확히 고정하는 편이 안전하다. 버전 확인:
+#       streamlit --version
+#   그 값을 그대로 적는다. 예) streamlit==1.42.0
+
+streamlit>=1.36,<1.60
+pandas>=2.0,<3.0
+numpy>=1.24,<3.0
+requests>=2.31,<3.0
+plotly>=5.20,<7.0

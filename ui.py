@@ -163,7 +163,7 @@ def section(title: str, note: str = "") -> None:
 # 진입 게이트
 # =====================================================================
 
-def mode_gate() -> str | None:
+def mode_gate(admin_pw: str = "") -> str | None:
     """처음 접속하면 역할을 먼저 묻는다.
 
     [왜 게이트를 두는가]
@@ -171,11 +171,21 @@ def mode_gate() -> str | None:
       관제 설정이 잔뜩 보이는 화면이 먼저 뜬다. 역할이 다르면 볼 화면도
       달라야 하므로, 선택을 화면 앞으로 끌어낸다.
 
+    [왜 비밀번호를 여기서 받는가]
+      관리자 화면에는 민감군 명단이 들어간다. 역할만 고르면 통과시키고
+      비밀번호를 사이드바에서 따로 받으면, 게이트에 "비밀번호가 필요합니다"라고
+      적어 놓고 실제로는 묻지 않는 상태가 된다. 잠금은 들어가는 문에 있어야 한다.
+
+    admin_pw: secrets의 ADMIN_PW. 비어 있으면 경고와 함께 통과시킨다.
     반환: "worker" | "admin" | None (아직 선택 안 함)
     """
     picked = st.session_state.get("_mode")
     if picked:
         return picked
+
+    # 관리자를 고른 뒤 비밀번호 단계
+    if st.session_state.get("_gate_admin"):
+        return _admin_gate(admin_pw)
 
     st.markdown("""
 <div class="gate">
@@ -204,11 +214,67 @@ def mode_gate() -> str | None:
 </div>""", unsafe_allow_html=True)
         if st.button("관리자로 시작", use_container_width=True,
                      type="primary", key="_g_admin"):
-            st.session_state["_mode"] = "admin"
+            st.session_state["_gate_admin"] = True
             st.rerun()
 
     st.caption("관리자 모드는 비밀번호가 필요합니다. "
                "민감군 명단이 포함되므로 접근을 제한합니다.")
+    return None
+
+
+def _admin_gate(admin_pw: str) -> str | None:
+    """관리자 비밀번호 확인 화면."""
+    st.markdown("""
+<div class="gate">
+  <div class="gate-q">관리자 인증</div>
+  <div class="gate-n">민감군 명단이 포함된 화면입니다</div>
+</div>""", unsafe_allow_html=True)
+
+    def _back() -> None:
+        st.session_state.pop("_gate_admin", None)
+        st.session_state.pop("_gate_err", None)
+        st.rerun()
+
+    # 비밀번호가 설정돼 있지 않으면 막을 방법이 없다.
+    # 조용히 통과시키면 잠겨 있다고 오해하므로 상태를 분명히 알린다.
+    if not admin_pw:
+        st.warning("secrets에 ADMIN_PW가 설정되지 않았습니다 — 인증 없이 들어갑니다. "
+                   "실제 운영 전에 반드시 설정하세요.", icon="🔓")
+        c1, c2 = st.columns([1, 1])
+        if c1.button("그래도 들어가기", use_container_width=True,
+                     type="primary", key="_g_nopw"):
+            st.session_state["_mode"] = "admin"
+            st.session_state.pop("_gate_admin", None)
+            st.rerun()
+        if c2.button("뒤로", use_container_width=True, key="_g_back0"):
+            _back()
+        return None
+
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("_gate_pw_form"):
+            pw = st.text_input("관리자 비밀번호", type="password",
+                               key="_g_pw")
+            ok = st.form_submit_button("확인", use_container_width=True,
+                                       type="primary")
+        if ok:
+            # secrets나 입력값 끝에 공백·줄바꿈이 섞이면 조용히 실패한다.
+            if pw and pw.strip() == str(admin_pw).strip():
+                st.session_state["_mode"] = "admin"
+                st.session_state.pop("_gate_admin", None)
+                st.session_state.pop("_gate_err", None)
+                st.rerun()
+            else:
+                st.session_state["_gate_err"] = True
+
+        if st.session_state.get("_gate_err"):
+            st.error("비밀번호가 일치하지 않습니다.")
+
+        if st.button("뒤로", use_container_width=True, key="_g_back1"):
+            _back()
+
+    st.caption("비밀번호는 Streamlit Cloud → Manage app → Settings → Secrets 의 "
+               "`ADMIN_PW` 값입니다. 값 앞뒤 공백·따옴표가 섞이지 않았는지 확인하세요.")
     return None
 
 
@@ -219,7 +285,7 @@ def mode_switch(current: str) -> None:
                 f'padding:8px 0 2px">{label} 모드</div>',
                 unsafe_allow_html=True)
     if st.button("역할 변경", use_container_width=True, key="_m_switch"):
-        for k in ("_mode", "_worker"):
+        for k in ("_mode", "_worker", "_gate_admin", "_gate_err"):
             st.session_state.pop(k, None)
         st.rerun()
 

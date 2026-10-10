@@ -836,35 +836,24 @@ def main() -> None:
     # ---- 역할 선택 ----
     # 역할이 다르면 볼 화면도 다르다. 사이드바 라디오는 열어서 찾아야 하고,
     # QR로 들어온 근로자에게 관제 설정이 잔뜩 보이는 화면이 먼저 뜬다.
-    _role = UI.mode_gate()
+    # 비밀번호는 게이트 안에서 받는다. 역할을 고른 뒤 사이드바에서 따로 받으면
+    # 인증 전 화면이 한 번 그려지고, 게이트의 안내와 실제 동작이 어긋난다.
+    try:
+        _admin_pw = st.secrets.get("ADMIN_PW", "")
+    except Exception:
+        _admin_pw = ""
+
+    _role = UI.mode_gate(_admin_pw)
     if _role is None:
         st.stop()
     mode = "🛡️ 관리자" if _role == "admin" else "👷 근로자"
+    # 게이트를 통과한 시점에 이미 확인이 끝났다.
+    is_admin = _role == "admin"
 
     with st.sidebar:
         UI.mode_switch(_role)
         st.divider()
         st.header("⚙️ 관제 설정")
-
-        # Streamlit은 사용자별 인증이 없어 URL을 아는 사람은 모두 접근할 수 있다.
-        # 민감군 명단이 노출되지 않도록 관리자 모드에 비밀번호를 건다.
-        is_admin = False
-        if mode.startswith("🛡️"):
-            try:
-                admin_pw = st.secrets.get("ADMIN_PW", "")
-            except Exception:
-                admin_pw = ""
-            if not admin_pw:
-                st.warning("secrets에 ADMIN_PW 미설정 — 임시 통과")
-                is_admin = True
-            else:
-                pw = st.text_input("관리자 비밀번호", type="password")
-                # secrets나 입력값 끝에 공백·줄바꿈이 섞이면 조용히 실패한다.
-                is_admin = bool(pw) and pw.strip() == str(admin_pw).strip()
-                if pw and not is_admin:
-                    st.error("비밀번호가 일치하지 않습니다.")
-        admin_locked = mode.startswith("🛡️") and not is_admin
-        st.divider()
 
         place = st.text_input("현장 위치", placeholder="예: 국민대학교")
 
@@ -1233,17 +1222,7 @@ def main() -> None:
     # ---------- 근로자 모드 ----------
     # 지침은 자각증상 점검표를 '근로자 스스로' 체크하도록 정한다.
     # 근로자에게는 남의 건강정보를 일절 보여주지 않는다.
-    if admin_locked:
-        # 관리자 모드를 골랐는데 인증 전이면, 근로자 화면으로 흘려보내지 않는다.
-        # 그러면 "관리자 모드가 안 된다"로 보여 원인을 찾기 어렵다.
-        st.warning("🔒 **관리자 인증이 필요합니다.** "
-                   "사이드바에서 관리자 비밀번호를 입력하세요.", icon="🔒")
-        st.caption("비밀번호는 Streamlit Cloud → Manage app → Settings → Secrets 의 "
-                   "`ADMIN_PW` 값입니다. 값 앞뒤 공백·따옴표가 섞이지 않았는지 "
-                   "확인하세요.")
-        st.caption("근로자용 화면을 보시려면 사이드바에서 «👷 근로자»를 선택하세요.")
-        st.stop()
-
+    # 인증은 게이트에서 끝났으므로 여기서 다시 막지 않는다.
     if not is_admin:
         st.markdown(
             f"""<div style="background:{day_tier.color};color:#fff;padding:18px;
