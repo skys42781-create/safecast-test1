@@ -350,14 +350,13 @@ def render(d: dict) -> dict:
         done_now = sum(1 for r in items if r.get("done"))
         _w(_check_head(done_now, len(items)))
 
-        with st.container(border=False):
-            c1, c2 = st.columns(2, gap="small")
-            for i, r in enumerate(items):
-                with (c1 if i % 2 == 0 else c2):
-                    checked[r["hour"]] = st.checkbox(
-                        f"{r['hour']}시 · {r['check_label']}",
-                        value=r.get("done", False),
-                        key=f"sc1c_chk_{r['hour']}", disabled=locked)
+        c1, c2 = st.columns(2, gap="small")
+        for i, r in enumerate(items):
+            with (c1 if i % 2 == 0 else c2):
+                checked[r["hour"]] = st.checkbox(
+                    f"{r['hour']}시 · {r['check_label']}",
+                    value=r.get("done", False),
+                    key=f"sc1c_chk_{r['hour']}", disabled=locked)
 
         note = ("데모 데이터에서는 이행 체크를 기록할 수 없습니다."
                 if locked else
