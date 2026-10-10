@@ -29,6 +29,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+import admin_1a as A
 import correction as C
 import hero as HERO
 import records as R
@@ -81,6 +82,8 @@ KEY_PARAM = ENDPOINTS[0]["key_param"]
 # SECTION 0. 법적 기준 정의
 # =====================================================================
 
+# 등급 색은 theme.py(TIER)·ui.py(ACCENT)와 같은 값을 쓴다.
+# 한 등급이 화면마다 다른 색으로 보이면 색 자체가 신호 역할을 못한다.
 @dataclass(frozen=True)
 class HeatTier:
     min_temp: float
@@ -128,26 +131,26 @@ def effective_rest(tier: "HeatTier", strict: bool) -> tuple[float | None, int, s
 
 # ※ 내림차순 정렬 필수 (classify가 위에서부터 검사)
 HEAT_TIERS: list[HeatTier] = [
-    HeatTier(38.0, "CRITICAL", "위험 (폭염중대경보)", "위험", "#7F1D1D", "권고", 1, 15, True, (
+    HeatTier(38.0, "CRITICAL", "위험 (폭염중대경보)", "위험", "#7F1D2D", "권고", 1, 15, True, (
         ("의무", "매 2시간 이내 20분 이상 휴식 (제560조제3항)"),
         ("의무", "체감온도·조치사항 일자별 기록·보관 (제562조제2항제3호)"),
         ("권고", "긴급조치 작업 외 옥외작업 중지"),
         ("권고", "온열질환 민감군 옥외작업 제한"),
         ("권고", "업무담당자 건강상태 확인 강화"),
     )),
-    HeatTier(35.0, "SEVERE", "심각 (폭염경보)", "심각", "#DC2626", "권고", 1, 15, True, (
+    HeatTier(35.0, "SEVERE", "심각 (폭염경보)", "심각", "#B91C1C", "권고", 1, 15, True, (
         ("의무", "매 2시간 이내 20분 이상 휴식 (제560조제3항)"),
         ("의무", "체감온도·조치사항 일자별 기록·보관 (제562조제2항제3호)"),
         ("권고", "매시간 15분 이상 휴식"),
         ("권고", "14~17시 옥외작업 중지 (불가피한 경우 제외)"),
         ("권고", "업무담당자 지정 후 근로자 건강상태 확인"),
     )),
-    HeatTier(33.0, "ALERT", "경계 (폭염주의보)", "경계", "#EA580C", "의무", 2, 20, False, (
+    HeatTier(33.0, "ALERT", "경계 (폭염주의보)", "경계", "#C2410C", "의무", 2, 20, False, (
         ("의무", "매 2시간 이내 20분 이상 휴식 (제560조제3항)"),
         ("의무", "체감온도·조치사항 일자별 기록·보관 (제562조제2항제3호)"),
         ("권고", "작업시간대 조정 또는 옥외작업 단축"),
     )),
-    HeatTier(31.0, "CAUTION", "주의 (폭염작업)", "주의", "#F59E0B", "의무", None, 0, False, (
+    HeatTier(31.0, "CAUTION", "주의 (폭염작업)", "주의", "#B45309", "의무", None, 0, False, (
         ("의무", "냉방·통풍장치, 작업시간 조정, 휴식 중 1개 이상 (제560조제2항)"),
         ("의무", "작업장소에 온·습도계 상시 비치 (제562조제2항제1호)"),
         ("의무", "증상·예방·응급조치 요령 사전 주지 (제562조제2항제2호)"),
@@ -155,7 +158,7 @@ HEAT_TIERS: list[HeatTier] = [
         ("의무", "소금과 음료수 비치 (제571조)"),
         ("권고", "2시간 이상 연속작업 지양"),
     )),
-    HeatTier(-99.0, "NORMAL", "관심 (평시)", "평시", "#16A34A", "-", None, 0, False, (
+    HeatTier(-99.0, "NORMAL", "관심 (평시)", "평시", "#15803D", "-", None, 0, False, (
         ("권고", "평시 작업 / 수분 섭취 안내"),
     )),
 ]
@@ -1223,19 +1226,22 @@ def main() -> None:
         _acts = ct.actions_by(strict)
         _act_line = f"{_acts[0][1]} — {ct.legal}" if _acts else ""
 
-        HERO.render_hero(
-            tier_short=ct.short, tier_legal=ct.legal,
-            ta=float(cur_ta), rh=float(cur_rh), at=float(cur_at),
-            series=_ser, now_hour=now.hour, site_name=name,
-            grid=f"{nx}/{ny}",
-            today_str=f"{now:%Y-%m-%d} ({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
-            stamp=(f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
-            corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
-                       if corr.get("applied") else "기상청 원본값"),
-            action_note=_act_line,
-            details=_details, stats=_stats, demo=demo,
-            alerts=_alerts,
-        )
+        # 관리자는 아래에서 admin_1a 화면 전체를 그린다.
+        # 같은 판정을 두 번 그리면 화면이 중복되고 값이 어긋날 소지가 생긴다.
+        if not is_admin:
+            HERO.render_hero(
+                tier_short=ct.short, tier_legal=ct.legal,
+                ta=float(cur_ta), rh=float(cur_rh), at=float(cur_at),
+                series=_ser, now_hour=now.hour, site_name=name,
+                grid=f"{nx}/{ny}",
+                today_str=f"{now:%Y-%m-%d} ({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
+                stamp=(f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
+                corr_note=(f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
+                           if corr.get("applied") else "기상청 원본값"),
+                action_note=_act_line,
+                details=_details, stats=_stats, demo=demo,
+                alerts=_alerts,
+            )
 
         # 보정이 통째로 빠지는 경우는 판정에 직접 영향을 주므로 화면에 남긴다.
         if elev_failed:
@@ -1349,35 +1355,14 @@ def main() -> None:
     _tmr_max = float(tmr_df["at"].max()) if not tmr_df.empty else None
     _tmr_tier = classify(_tmr_max) if _tmr_max is not None else None
 
+    # 1a 지표가 담지 못하는 둘만 따로 남긴다.
+    #   미확인 신고는 놓치면 안 되고, 내일 최고는 사전 계획의 근거다.
+    #   다음 알람·관리 대상은 아래 히어로 지표에 이미 들어간다.
     _cards = []
-
-    # 다음 알람 — 지금 당장 할 일
-    if not _al_now.empty:
-        _nx = _al_now.iloc[0]
-        _cards.append({"icon": "🚧", "label": "다음 알람",
-                       "value": str(_nx["발송시각"]),
-                       "note": f"{_nx['대상 블록']} 진입 · {_nx['등급']}",
-                       "accent": classify(float(_nx["체감온도"]
-                                                .replace("℃", ""))).color
-                       if isinstance(_nx["체감온도"], str) else day_tier.color})
-    else:
-        _cards.append({"icon": "🚧", "label": "다음 알람", "value": "없음",
-                       "note": "사전 통보 대상 구간 없음", "accent": "#8B95A1"})
-
-    # 관리 대상 — 누구를 챙길지
-    _tg = len(day_tbm) if not day_tbm.empty else 0
-    _cards.append({"icon": "👷", "label": "관리 대상",
-                   "value": f"{_tg} / {len(roster)}명",
-                   "note": "민감군 · 열순응 대상",
-                   "accent": "#C2410C" if _tg else "#8B95A1"})
-
-    # 미확인 신고 — 놓치면 안 되는 것
     _cards.append({"icon": "🚨", "label": "미확인 신고",
                    "value": f"{_alerts}건",
                    "note": "즉시 현장 확인 필요" if _alerts else "접수 없음",
                    "accent": "#DC2626" if _alerts else "#15803D"})
-
-    # 내일 — 사전 계획
     if _tmr_tier is not None:
         _up = _tmr_max > day_max
         _cards.append({"icon": "📅", "label": "내일 최고",
@@ -1387,78 +1372,93 @@ def main() -> None:
                                 f"{'높음' if _up else '낮음'}"),
                        "accent": _tmr_tier.color})
 
-    UI.summary_grid(_cards)
+    # ---------- 관리자 화면 (시안 1a) ----------
+    # 히어로·지표·블록·알람·명단을 한 모듈이 그린다.
+    # 같은 판정을 여러 곳에서 따로 그리면 값이 어긋날 소지가 생긴다.
+    _acts_now = ct.actions_by(strict)
 
-    UI.section("오늘 공정 블록",
-               f"{len(_blk_now[_blk_now['is_work']]) if not _blk_now.empty else 0}개 작업 구간 · 블록 내 최고값 기준")
+    _a_blocks = []
+    for _, _r in _blk_now.iterrows():
+        _run = _r["start"] <= now < _r["end"]
+        _t = tier_by_code(_r["tier_code"])
+        _sl = rest_slots(_r, strict) if _r["is_work"] else []
+        _acts = [{"text": _tx, "kind": _lv,
+                  "strong": (_lv == "의무" and _i == 0)}
+                 for _i, (_lv, _tx) in enumerate(_t.actions_by(strict))][:3]
+        if _sl:
+            _acts.append({"text": " · ".join(
+                f"{x['휴식 시작']}–{x['휴식 종료']}" for x in _sl[:2]),
+                "kind": "의무", "strong": True})
+        _a_blocks.append({
+            "name": _r["block_name"].split("(")[0].strip(),
+            "hours": f"{_r['start']:%H:%M} – {_r['end']:%H:%M}",
+            "tier": _t.short, "value": f"{_r['at_rep']:.1f}",
+            "is_work": bool(_r["is_work"]), "running": _run,
+            "actions": _acts,
+            "basis": f"{_r['peak_hour']}시 {_r['at_max']:.1f}℃가 블록 결정 · {_t.legal}",
+        })
+
+    _a_alarms = []
+    if not _al_now.empty:
+        _nowhm = now.strftime("%H:%M")
+        for _, _a in _al_now.head(4).iterrows():
+            # 실제 전파 여부는 기록하지 않는다. 시스템이 스스로 전파했다고
+            # 쓰면 허위 기록이므로 시각 경과만 표시한다.
+            _a_alarms.append({
+                "time": str(_a["발송시각"]),
+                "status": "sent" if str(_a["발송시각"]) <= _nowhm else "pending",
+                "message": f"{_a['대상 블록']} 진입 — 판정 {_a['체감온도']} {_a['등급']}",
+            })
+
+    _RISK = {"집중관찰": "심각", "열순응 관리": "경계", "주의 관찰": "주의"}
+    _a_workers = []
+    if not day_tbm.empty:
+        for _, _t2 in T.public_view(day_tbm).head(5).iterrows():
+            _a_workers.append({
+                "name": str(_t2["성명"]),
+                "types": str(_t2["조치사항"])[:30],
+                "status": str(_t2["공종"]),
+                "risk": _RISK.get(str(_t2["관리등급"]), "평시"),
+            })
+
+    _a_metrics = [
+        {"label": "오늘 최고 체감", "value": f"{day_max:.1f}℃",
+         "sub": f"{int(today_df.loc[today_df['at'].idxmax(), 'hour'])}시 · {day_tier.short} 구간"
+                if not today_df.empty else "—"},
+        {"label": "다음 알람",
+         "value": (str(_al_now.iloc[0]["발송시각"]) if not _al_now.empty else "없음"),
+         "sub": (f"{_al_now.iloc[0]['대상 블록']} 진입 {lead}분 전"
+                 if not _al_now.empty else "사전 통보 대상 구간 없음")},
+        {"label": "관리 대상",
+         "value": f"{len(day_tbm) if not day_tbm.empty else 0} / {len(roster)}명",
+         "sub": "민감군 · 열순응 대상"},
+        {"label": "작업시간 손실률",
+         "value": f"{loss_ratio(_blk_now, strict) if not _blk_now.empty else 0}%",
+         "sub": "법적 의무만" if strict else "의무 휴식 + 옥외 중지"},
+    ]
+
+    A.render({
+        "site": name, "grid": f"{nx}/{ny}",
+        "now_text": f"{now:%Y-%m-%d} ({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
+        "source_text": (f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
+        "hero": {
+            "tier_label": f"{ct.short} · {ct.legal}" if ct.legal != "-" else ct.short,
+            "apparent": f"{cur_at:.1f}",
+            "reading": f"기온 {cur_ta:.1f}℃ · 습도 {int(round(cur_rh))}%",
+            "correction": (f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
+                           if corr.get("applied") else "기상청 원본값"),
+            "legal": (f"{_acts_now[0][1]}" if _acts_now else ""),
+        },
+        "metrics": _a_metrics,
+        "blocks": _a_blocks,
+        "alarms": _a_alarms,
+        "workers": _a_workers,
+    }, legal_only=strict, show_basis=True, show_send=False)
+
     if _blk_now.empty:
         st.caption("오늘 잔여 예보가 없습니다.")
-    else:
-        _bc = st.columns(len(_blk_now))
-        for _i, (_, _r) in enumerate(_blk_now.iterrows()):
-            _run = _r["start"] <= now < _r["end"]
-            _sl = rest_slots(_r, strict) if _r["is_work"] else []
-            _rn = ""
-            if _sl:
-                _rn = " · ".join(f"{x['휴식 시작']}–{x['휴식 종료']}"
-                                 for x in _sl[:2])
-            elif _r["is_work"]:
-                _rn = "휴식 미배정 — 조치 선택 필요"
-            _acts2 = tier_by_code(_r["tier_code"]).actions_by(strict)
-            _r2 = _r.copy()
-            _r2["rest_note"] = _rn
-            _r2["action_note"] = _acts2[0][1] if _acts2 else ""
-            with _bc[_i]:
-                st.markdown(block_card(_r2, running=_run),
-                            unsafe_allow_html=True)
 
-    # ---------- 오늘 알람 · TBM 관리 대상 ----------
-    # 좌우 2단으로 붙인다. 세로로 늘어놓으면 스크롤이 길어지고
-    # 둘 사이 여백이 화면을 비어 보이게 한다.
-    _L, _R = st.columns([1.15, 1], gap="small")
-
-    with _L:
-        _h = [UI.panel_open("오늘 알람", f"사전 통보 {lead}분 · 문구 그대로 전파")]
-        if _al_now.empty:
-            _h.append('<div style="font-size:12px;color:#7A7A7D;padding:6px 2px">'
-                      '등급이 올라가는 구간이 없어 사전 통보 대상이 없습니다.</div>')
-        else:
-            _nowhm = now.strftime("%H:%M")
-            for _, _a in _al_now.head(4).iterrows():
-                # 실제 전파 여부는 기록하지 않는다. 시스템이 스스로
-                # "전파했다"고 쓰면 허위 기록이므로, 시각 경과만 표시한다.
-                _sent = str(_a["발송시각"]) <= _nowhm
-                _tc = tier_by_code(
-                    _a["등급코드"]).color if "등급코드" in _a else day_tier.color
-                _h.append(UI.grid_row(
-                    str(_a["발송시각"]),
-                    f"{_a['대상 블록']} 진입 — 판정 {_a['체감온도']} {_a['등급']}",
-                    "시각 경과" if _sent else "발송 예정",
-                    accent="#15803D" if _sent else _tc,
-                    urgent=not _sent, tail_filled=not _sent))
-        _h.append(UI.panel_close())
-        st.markdown("".join(_h), unsafe_allow_html=True)
-
-    with _R:
-        _h2 = [UI.panel_open("TBM 관리 대상",
-                             "선별·기록만 — 근로 제한 판단은 관리자")]
-        if day_tbm.empty:
-            _h2.append('<div style="font-size:12px;color:#7A7A7D;padding:6px 2px">'
-                       '현재 등급에서 관리 대상자가 없습니다.</div>')
-        else:
-            _pv = T.public_view(day_tbm)
-            for _, _t in _pv.head(4).iterrows():
-                _tcol = TIER_BY_LABEL.get(str(_t["관리등급"]), "#7A7A7D")
-                _h2.append(UI.list_row(
-                    str(_t["성명"]), str(_t["조치사항"])[:34],
-                    str(_t["공종"]), accent=_tcol))
-            if len(_pv) > 4:
-                _h2.append(
-                    f'<div style="font-size:11.5px;color:#7A7A7D;'
-                    f'padding:5px 2px">이 외 {len(_pv) - 4}명 · '
-                    f'38℃ 도달 시 옥외작업 제한 대상 포함</div>')
-        _h2.append(UI.panel_close())
-        st.markdown("".join(_h2), unsafe_allow_html=True)
+    UI.summary_grid(_cards)
 
     with st.expander("알람 전달 문구", expanded=False):
         if _al_now.empty:
