@@ -1199,9 +1199,14 @@ def main() -> None:
     _view = st.radio("화면", _VIEWS, horizontal=True,
                      label_visibility="collapsed", key="_adm_view")
 
+    # 블록이 비어도 화면은 그린다.
+    #   남은 공정 블록은 하루가 끝나갈수록 줄어 결국 0이 된다.
+    #   그때 화면을 통째로 숨기면 현재 체감온도도 내일 예보도 볼 수 없다.
+    #   관제 화면이 저녁마다 비는 셈이라, 빈 블록은 안내로만 알린다.
     if _blk_now.empty:
-        st.caption("오늘 잔여 예보가 없습니다.")
-    elif _view == _VIEWS[0]:
+        st.caption("오늘 남은 공정 블록이 없습니다 — 현재 상태와 내일 예보만 표시합니다.")
+
+    if _view == _VIEWS[0]:
         A.render(AD.build_1a(_ctx), legal_only=strict, show_basis=True,
                  show_send=False)
     elif _view == _VIEWS[1]:
