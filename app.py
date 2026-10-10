@@ -30,10 +30,12 @@ import requests
 import streamlit as st
 
 import admin_1a as A
+import admin_1b as B
+import admin_1c as Cc
+import admin_data as AD
 import correction as C
 import hero as HERO
 import records as R
-import sheet as SH
 import worker as W
 import snapshot as SNAP
 import stations as S
@@ -610,190 +612,6 @@ TIER_BY_LABEL = {
 }
 
 
-def block_card(r: pd.Series, *, running: bool = False,
-               show_basis: bool = True) -> str:
-    """공정 블록 카드 — 도면 객체.
-
-    상단 3px 색선이 등급, 본문은 판정값과 조치, 하단에 근거 조문.
-    진행 중인 블록만 배지를 채우고 그림자를 줘서 지금 어디인지 드러낸다.
-    """
-    col = r["color"]
-    dim = "opacity:.55;" if not r["is_work"] else ""
-    shadow = "box-shadow:0 3px 10px rgba(43,43,45,.16);" if running else ""
-
-    if running:
-        badge = (f'<span style="font-size:11px;font-weight:700;color:#F2F2F3;'
-                 f'background:{col};padding:2px 8px">{r["tier_label"]} · 진행중</span>')
-    else:
-        badge = (f'<span style="font-size:11px;font-weight:700;color:{col};'
-                 f'border:1px solid {col};padding:1px 7px">{r["tier_label"]}</span>')
-
-    val_label = "℃ 판정값" if r["is_work"] else "℃ 참고값"
-    act = str(r.get("action_note", "") or "")
-    rest = str(r.get("rest_note", "") or "")
-    basis = ""
-    if show_basis and r.get("legal"):
-        basis = (f'<div style="margin-top:8px;font-size:11px;color:#98989B">'
-                 f'{r["legal"]}</div>')
-
-    return f"""
-<div style="border:1px solid rgba(29,31,32,.16);border-top:3px solid {col};
-            background:#fff;padding:15px 15px 13px;{dim}{shadow}">
-  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
-    <span style="font-weight:600;font-size:15px">{r['block_name']}</span>
-    {badge}
-  </div>
-  <div style="font-size:12px;color:#7A7A7D;font-variant-numeric:tabular-nums;
-              margin-top:2px">{r['start']:%H:%M} – {r['end']:%H:%M}</div>
-  <div style="display:flex;align-items:flex-end;gap:6px;margin:9px 0 3px">
-    <span style="font-weight:600;font-size:29px;line-height:1;color:{col};
-                 font-variant-numeric:tabular-nums">{r['at_rep']}</span>
-    <span style="font-size:12.5px;color:#7A7A7D;margin-bottom:3px">{val_label}</span>
-  </div>
-  <div style="margin-top:9px;padding-top:9px;
-              border-top:1px solid rgba(29,31,32,.12);
-              font-size:12px;line-height:1.6">
-    {act}{f'<br><span style="color:#7A7A7D">{rest}</span>' if rest else ''}
-  </div>
-  {basis}
-</div>"""
-
-
-def timeline(df: pd.DataFrame, title: str,
-             blocks_def: list[WorkBlock] | None = None) -> go.Figure:
-    fig = go.Figure()
-    for d in sorted(df["day"].unique()):
-        for b in (blocks_def or WORK_BLOCKS):
-            if not b.is_work:
-                continue
-            s = df[(df["day"] == d) & (df["hour"] >= b.start_h) & (df["hour"] < b.end_h)]
-            if s.empty:
-                continue
-            fig.add_vrect(x0=datetime.combine(d, time(b.start_h)),
-                          x1=datetime.combine(d, time(b.end_h)),
-                          fillcolor=classify(s["at"].max()).color,
-                          opacity=0.13, line_width=0, layer="below")
-    for t in HEAT_TIERS:
-        if t.min_temp < 0:
-            continue
-        fig.add_hline(y=t.min_temp, line_dash="dot", line_color=t.color, line_width=1.2,
-                      annotation_text=f"{t.min_temp:.0f}℃ {t.short}",
-                      annotation_position="right",
-                      annotation_font=dict(size=10, color=t.color))
-    fig.add_trace(go.Scatter(x=df["datetime"], y=df["ta"], name="기온",
-                             line=dict(color="#94A3B8", width=1.6, dash="dash")))
-    fig.add_trace(go.Scatter(x=df["datetime"], y=df["at"], name="체감온도",
-                             line=dict(color="#1E293B", width=3),
-                             mode="lines+markers", marker=dict(size=4)))
-    fig.update_layout(title=title, height=380, hovermode="x unified",
-                      margin=dict(l=10, r=75, t=45, b=10), yaxis_title="℃",
-                      legend=dict(orientation="h", y=1.12, x=0))
-    return fig
-
-
-def _sheet_action(blk) -> str:
-    """판정 원본 표의 조치 칸 문구.
-
-    [의무를 앞에 둔다]
-      심각·위험 등급에서도 옥외작업 중지는 대응지침의 '권고'이고,
-      법적 의무는 여전히 제560조제3항의 2시간/20분 휴식이다.
-      둘을 섞어 적으면 무엇을 지키지 않았을 때 처벌받는지가 흐려진다.
-      의무를 먼저 쓰고, 중지 검토는 권고임을 밝혀 뒤에 붙인다.
-    """
-    t = tier_by_code(str(blk["tier_code"]))
-
-    if not blk.get("is_work", True):
-        return "비작업 — 그늘·냉방 휴게장소 및 소금·음료수 비치 점검 (제567조제2항·제571조)"
-
-    must = [txt for lv, txt in t.actions if lv == "의무"]
-    head = must[0] if must else (t.action_texts[0] if t.action_texts else "해당 조치 없음")
-    return f"{head} · 권고 옥외작업 중지 검토" if t.stop_work else head
-
-
-def _sheet_note(fbias: dict) -> str:
-    """표 아래 보정 근거 한 줄."""
-    if fbias.get("applied") and fbias.get("correction"):
-        return (f"격자 편의 보정 {fbias['correction']:+.1f}℃ 적용 · "
-                f"고도 기온감률 및 이슬점 보존 습도 재계산 포함")
-    return f"편의 보정 미적용 — {fbias.get('reason', '사유 없음')}"
-
-
-def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int,
-               strict: bool = False,
-               blocks_def: list[WorkBlock] | None = None,
-               show_summary: bool = True) -> None:
-    """하루치 판정 화면.
-
-    show_summary: 요약 지표(최고 체감온도·중지 블록·손실률) 표시 여부.
-      오늘 탭은 히어로가 같은 지표를 이미 보여주므로 False로 둔다.
-    """
-    blocks = build_blocks(day_df, target, conservative, blocks_def)
-    if blocks.empty:
-        st.warning("해당 일자의 예보 데이터가 없습니다.")
-        return
-
-    work = blocks[blocks["is_work"]]
-    dmax = day_df["at"].max()
-    dt_ = classify(dmax)
-
-    if show_summary:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("최고 체감온도", f"{dmax:.1f}℃",
-                  delta=f"기온 대비 +{dmax - day_df['ta'].max():.1f}℃")
-        c2.metric("통제 등급", dt_.short, delta=dt_.legal, delta_color="off")
-        c3.metric("작업중지 블록", f"{int(work['stop_work'].sum())} / {len(work)}")
-        c4.metric("작업시간 손실률", f"{loss_ratio(blocks, strict)}%",
-                  delta="의무만" if strict else None, delta_color="off")
-
-    # ---- 조치사항: 의무 / 권고 구분 표시 ----
-    acts = dt_.actions_by(strict)
-    if acts:
-        must = [t for lv, t in acts if lv == "의무"]
-        rec = [t for lv, t in acts if lv == "권고"]
-        cm, cr = st.columns(2)
-        with cm:
-            if must:
-                st.markdown("🔴 **법적 의무** — 위반 시 5년 이하 징역 또는 5천만원 이하 벌금")
-                for t in must:
-                    st.markdown(f"- {t}")
-        with cr:
-            if rec and not strict:
-                st.markdown("🟠 **권고** — 고용노동부 대응지침")
-                for t in rec:
-                    st.markdown(f"- {t}")
-            elif strict:
-                st.caption("권고 항목은 숨김 (사이드바에서 해제)")
-
-    # ---- 의무 vs 권고 휴식 비교 ----
-    if dt_.min_temp >= MANDATORY_MIN_TEMP:
-        mc, mm, _ = effective_rest(dt_, True)
-        rc, rm, _ = effective_rest(dt_, False)
-        if (mc, mm) != (rc, rm):
-            st.info(f"🔴 **법적 최소** {mc:.0f}시간마다 {mm}분 (제560조제3항) ／ "
-                    f"🟠 **지침 권고** {rc:.0f}시간마다 {rm}분 (대응지침 14쪽)")
-
-    L, R = st.columns([1, 1.35])
-    with L:
-        st.markdown("##### 공정 블록별 통제 등급")
-        for _, r in blocks.iterrows():
-            st.markdown(block_card(r), unsafe_allow_html=True)
-    with R:
-        # 제목을 비운다. 축 라벨과 겹쳐 둘 다 읽히지 않는다.
-        st.plotly_chart(timeline(day_df, "", blocks_def),
-                        use_container_width=True)
-
-        # 휴식 계획은 있을 때만 낸다. 빈 안내문이 매번 자리를 차지할 이유가 없다.
-        _plans = [(r, rest_slots(r, strict)) for _, r in blocks.iterrows()]
-        _plans = [(r, sl) for r, sl in _plans if sl]
-        if _plans:
-            st.markdown("##### 블록별 휴식 계획")
-            for r, sl in _plans:
-                st.caption(f"**{r['block_name']}** — {r['tier_label']}")
-                st.dataframe(pd.DataFrame(sl), hide_index=True,
-                             use_container_width=True)
-
-
-
 def render_logo() -> None:
     """SAFECASTY 워드마크.
 
@@ -1355,110 +1173,42 @@ def main() -> None:
     _tmr_max = float(tmr_df["at"].max()) if not tmr_df.empty else None
     _tmr_tier = classify(_tmr_max) if _tmr_max is not None else None
 
-    # 1a 지표가 담지 못하는 둘만 따로 남긴다.
-    #   미확인 신고는 놓치면 안 되고, 내일 최고는 사전 계획의 근거다.
-    #   다음 알람·관리 대상은 아래 히어로 지표에 이미 들어간다.
-    _cards = []
-    _cards.append({"icon": "🚨", "label": "미확인 신고",
-                   "value": f"{_alerts}건",
-                   "note": "즉시 현장 확인 필요" if _alerts else "접수 없음",
-                   "accent": "#DC2626" if _alerts else "#15803D"})
-    if _tmr_tier is not None:
-        _up = _tmr_max > day_max
-        _cards.append({"icon": "📅", "label": "내일 최고",
-                       "value": f"{_tmr_max:.1f}℃",
-                       "note": (f"{_tmr_tier.short} · 오늘보다 "
-                                f"{abs(_tmr_max - day_max):.1f}℃ "
-                                f"{'높음' if _up else '낮음'}"),
-                       "accent": _tmr_tier.color})
-
-    # ---------- 관리자 화면 (시안 1a) ----------
-    # 히어로·지표·블록·알람·명단을 한 모듈이 그린다.
-    # 같은 판정을 여러 곳에서 따로 그리면 값이 어긋날 소지가 생긴다.
-    _acts_now = ct.actions_by(strict)
-
-    _a_blocks = []
-    for _, _r in _blk_now.iterrows():
-        _run = _r["start"] <= now < _r["end"]
-        _t = tier_by_code(_r["tier_code"])
-        _sl = rest_slots(_r, strict) if _r["is_work"] else []
-        _acts = [{"text": _tx, "kind": _lv,
-                  "strong": (_lv == "의무" and _i == 0)}
-                 for _i, (_lv, _tx) in enumerate(_t.actions_by(strict))][:3]
-        if _sl:
-            _acts.append({"text": " · ".join(
-                f"{x['휴식 시작']}–{x['휴식 종료']}" for x in _sl[:2]),
-                "kind": "의무", "strong": True})
-        _a_blocks.append({
-            "name": _r["block_name"].split("(")[0].strip(),
-            "hours": f"{_r['start']:%H:%M} – {_r['end']:%H:%M}",
-            "tier": _t.short, "value": f"{_r['at_rep']:.1f}",
-            "is_work": bool(_r["is_work"]), "running": _run,
-            "actions": _acts,
-            "basis": f"{_r['peak_hour']}시 {_r['at_max']:.1f}℃가 블록 결정 · {_t.legal}",
-        })
-
-    _a_alarms = []
-    if not _al_now.empty:
-        _nowhm = now.strftime("%H:%M")
-        for _, _a in _al_now.head(4).iterrows():
-            # 실제 전파 여부는 기록하지 않는다. 시스템이 스스로 전파했다고
-            # 쓰면 허위 기록이므로 시각 경과만 표시한다.
-            _a_alarms.append({
-                "time": str(_a["발송시각"]),
-                "status": "sent" if str(_a["발송시각"]) <= _nowhm else "pending",
-                "message": f"{_a['대상 블록']} 진입 — 판정 {_a['체감온도']} {_a['등급']}",
-            })
-
-    _RISK = {"집중관찰": "심각", "열순응 관리": "경계", "주의 관찰": "주의"}
-    _a_workers = []
-    if not day_tbm.empty:
-        for _, _t2 in T.public_view(day_tbm).head(5).iterrows():
-            _a_workers.append({
-                "name": str(_t2["성명"]),
-                "types": str(_t2["조치사항"])[:30],
-                "status": str(_t2["공종"]),
-                "risk": _RISK.get(str(_t2["관리등급"]), "평시"),
-            })
-
-    _a_metrics = [
-        {"label": "오늘 최고 체감", "value": f"{day_max:.1f}℃",
-         "sub": f"{int(today_df.loc[today_df['at'].idxmax(), 'hour'])}시 · {day_tier.short} 구간"
-                if not today_df.empty else "—"},
-        {"label": "다음 알람",
-         "value": (str(_al_now.iloc[0]["발송시각"]) if not _al_now.empty else "없음"),
-         "sub": (f"{_al_now.iloc[0]['대상 블록']} 진입 {lead}분 전"
-                 if not _al_now.empty else "사전 통보 대상 구간 없음")},
-        {"label": "관리 대상",
-         "value": f"{len(day_tbm) if not day_tbm.empty else 0} / {len(roster)}명",
-         "sub": "민감군 · 열순응 대상"},
-        {"label": "작업시간 손실률",
-         "value": f"{loss_ratio(_blk_now, strict) if not _blk_now.empty else 0}%",
-         "sub": "법적 의무만" if strict else "의무 휴식 + 옥외 중지"},
-    ]
-
-    A.render({
-        "site": name, "grid": f"{nx}/{ny}",
-        "now_text": f"{now:%Y-%m-%d} ({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
+    # ---------- 관리자 화면 ----------
+    # 시안 세 안을 그대로 전환해 쓴다. 판정값은 한곳(_ctx)에서 나오므로
+    # 어느 화면을 보든 같은 숫자가 표시된다.
+    _ctx = {
+        "now": now, "site": name, "grid": f"{nx}/{ny}",
         "source_text": (f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
-        "hero": {
-            "tier_label": f"{ct.short} · {ct.legal}" if ct.legal != "-" else ct.short,
-            "apparent": f"{cur_at:.1f}",
-            "reading": f"기온 {cur_ta:.1f}℃ · 습도 {int(round(cur_rh))}%",
-            "correction": (f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
-                           if corr.get("applied") else "기상청 원본값"),
-            "legal": (f"{_acts_now[0][1]}" if _acts_now else ""),
-        },
-        "metrics": _a_metrics,
-        "blocks": _a_blocks,
-        "alarms": _a_alarms,
-        "workers": _a_workers,
-    }, legal_only=strict, show_basis=True, show_send=False)
+        "demo": bool(demo or fc_is_demo),
+        "cur_ta": float(cur_ta), "cur_rh": float(cur_rh), "cur_at": float(cur_at),
+        "cur_tier": ct,
+        "corr_note": (f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
+                      if corr.get("applied") else "기상청 원본값"),
+        "today_df": today_df, "blocks": _blk_now, "alarms": _al_now,
+        "tbm_public": (T.public_view(day_tbm) if not day_tbm.empty
+                       else pd.DataFrame()),
+        "roster_n": len(roster),
+        "day_max": day_max, "day_tier": day_tier,
+        "lead": lead, "strict": strict,
+        "loss": loss_ratio(_blk_now, strict) if not _blk_now.empty else 0,
+        "alerts": _alerts, "fbias": fbias,
+        "tier_by_code": tier_by_code, "rest_slots": rest_slots,
+    }
+
+    _VIEWS = ("블록 스트립", "시각 축 타임라인", "관제 시트")
+    _view = st.radio("화면", _VIEWS, horizontal=True,
+                     label_visibility="collapsed", key="_adm_view")
 
     if _blk_now.empty:
         st.caption("오늘 잔여 예보가 없습니다.")
+    elif _view == _VIEWS[0]:
+        A.render(AD.build_1a(_ctx), legal_only=strict, show_basis=True,
+                 show_send=False)
+    elif _view == _VIEWS[1]:
+        B.render(AD.build_1b(_ctx))
+    else:
+        Cc.render(AD.build_1c(_ctx))
 
-    UI.summary_grid(_cards)
 
     with st.expander("알람 전달 문구", expanded=False):
         if _al_now.empty:
@@ -1468,48 +1218,9 @@ def main() -> None:
                 st.caption(f"**{_a['발송시각']} · {_a['대상 블록']}**")
                 st.code(_a["메시지"], language=None)
 
-    UI.section("상세", "항목별 원본과 근거")
-
-    t1, t2, t8, t7, t3 = st.tabs(
-        [f"📅 오늘 ({today:%m/%d})", f"📅 내일 ({tomorrow:%m/%d})",
-         _rtab, "📝 조치 기록", "📖 법적 근거"])
-
-    with t1:
-        C.render_forecast_bias(fbias)
-        _b1 = build_blocks(today_df, today, conservative) \
-            if not today_df.empty else pd.DataFrame()
-        _tbm1 = T.build_tbm(roster, day_tier.code)
-        with st.expander("💧 휴식 알람", expanded=False):
-            T.render_rest_alarm(_b1, _tbm1, lead, extra_min,
-                                lambda b: rest_slots(b, strict),
-                                now.strftime("%H:%M"))
-        with st.expander("🌡️ 열순응 종료 알람", expanded=False):
-            T.render_acclim_alarm(_tbm1, work_start, work_hours, lead,
-                                  now.strftime("%H:%M"))
-        if today_df.empty:
-            st.warning("오늘 잔여 예보가 없습니다.")
-        else:
-            # 근거를 먼저 펼치고 상세를 뒤에 둔다.
-            # 심사·감독에서 먼저 요구받는 것이 이 표다.
-            SH.render(today_df, _b1, now=now, is_demo=fc_is_demo,
-                      source=src,
-                      correction_note=_sheet_note(fbias),
-                      action_of=_sheet_action)
-            st.divider()
-            render_day(today_df, today, conservative, lead, strict,
-                       show_summary=False)
-
-    with t2:
-        C.render_forecast_bias(fbias)
-        if tmr_df.empty:
-            st.warning("내일 예보 데이터가 없습니다.")
-        else:
-            SH.render(tmr_df, build_blocks(tmr_df, tomorrow, conservative),
-                      now=now, is_demo=fc_is_demo, source=src,
-                      correction_note=_sheet_note(fbias),
-                      action_of=_sheet_action)
-            st.divider()
-            render_day(tmr_df, tomorrow, conservative, lead, strict)
+    # 판정 화면이 보여주는 것과 겹치지 않는 것만 남긴다.
+    # 오늘·내일 상세는 위 세 화면이 이미 담고 있다.
+    t8, t7, t3 = st.tabs([_rtab, "📝 조치 기록", "📖 법적 근거"])
 
     with t8:
         W.render_admin()
