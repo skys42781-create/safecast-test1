@@ -32,6 +32,7 @@ import streamlit as st
 import correction as C
 import hero as HERO
 import records as R
+import sheet as SH
 import worker as W
 import snapshot as SNAP
 import stations as S
@@ -518,7 +519,8 @@ def build_blocks(day_df: pd.DataFrame, target: date, conservative: bool = True,
             "at_rep": round(rep, 1),
             "peak_hour": int(c.loc[c["at"].idxmax(), "hour"]),
             "ta_max": round(c["ta"].max(), 1), "rh_mean": round(c["rh"].mean()),
-            "tier_code": t.code, "tier_label": t.label, "color": t.color,
+            "tier_code": t.code, "tier_label": t.label, "tier_short": t.short,
+            "color": t.color,
             "legal": t.legal, "stop_work": t.stop_work,
         })
     return pd.DataFrame(rows)
@@ -684,6 +686,33 @@ def timeline(df: pd.DataFrame, title: str,
                       margin=dict(l=10, r=75, t=45, b=10), yaxis_title="℃",
                       legend=dict(orientation="h", y=1.12, x=0))
     return fig
+
+
+def _sheet_action(blk) -> str:
+    """판정 원본 표의 조치 칸 문구.
+
+    [의무를 앞에 둔다]
+      심각·위험 등급에서도 옥외작업 중지는 대응지침의 '권고'이고,
+      법적 의무는 여전히 제560조제3항의 2시간/20분 휴식이다.
+      둘을 섞어 적으면 무엇을 지키지 않았을 때 처벌받는지가 흐려진다.
+      의무를 먼저 쓰고, 중지 검토는 권고임을 밝혀 뒤에 붙인다.
+    """
+    t = tier_by_code(str(blk["tier_code"]))
+
+    if not blk.get("is_work", True):
+        return "비작업 — 그늘·냉방 휴게장소 및 소금·음료수 비치 점검 (제567조제2항·제571조)"
+
+    must = [txt for lv, txt in t.actions if lv == "의무"]
+    head = must[0] if must else (t.action_texts[0] if t.action_texts else "해당 조치 없음")
+    return f"{head} · 권고 옥외작업 중지 검토" if t.stop_work else head
+
+
+def _sheet_note(fbias: dict) -> str:
+    """표 아래 보정 근거 한 줄."""
+    if fbias.get("applied") and fbias.get("correction"):
+        return (f"격자 편의 보정 {fbias['correction']:+.1f}℃ 적용 · "
+                f"고도 기온감률 및 이슬점 보존 습도 재계산 포함")
+    return f"편의 보정 미적용 — {fbias.get('reason', '사유 없음')}"
 
 
 def render_day(day_df: pd.DataFrame, target: date, conservative: bool, lead: int,
@@ -1460,6 +1489,13 @@ def main() -> None:
         if today_df.empty:
             st.warning("오늘 잔여 예보가 없습니다.")
         else:
+            # 근거를 먼저 펼치고 상세를 뒤에 둔다.
+            # 심사·감독에서 먼저 요구받는 것이 이 표다.
+            SH.render(today_df, _b1, now=now, is_demo=fc_is_demo,
+                      source=src,
+                      correction_note=_sheet_note(fbias),
+                      action_of=_sheet_action)
+            st.divider()
             render_day(today_df, today, conservative, lead, strict,
                        show_summary=False)
 
@@ -1468,6 +1504,11 @@ def main() -> None:
         if tmr_df.empty:
             st.warning("내일 예보 데이터가 없습니다.")
         else:
+            SH.render(tmr_df, build_blocks(tmr_df, tomorrow, conservative),
+                      now=now, is_demo=fc_is_demo, source=src,
+                      correction_note=_sheet_note(fbias),
+                      action_of=_sheet_action)
+            st.divider()
             render_day(tmr_df, tomorrow, conservative, lead, strict)
 
     with t8:
