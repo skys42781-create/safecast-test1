@@ -1195,7 +1195,12 @@ def main() -> None:
         "tier_by_code": tier_by_code, "rest_slots": rest_slots,
     }
 
-    _VIEWS = ("블록 스트립", "시각 축 타임라인", "관제 시트")
+    # 한 번에 한 화면만 띄운다.
+    #   앞의 셋은 판정 화면, 뒤의 셋은 기록·관리 화면이다.
+    #   예전처럼 아래에 늘 붙여 두면 어느 화면을 골라도 같은 것이 따라와
+    #   화면을 고른 의미가 없어진다.
+    _VIEWS = ("블록 스트립", "시각 축 타임라인", "관제 시트",
+              _rtab.replace("🚨 ", ""), "조치 기록", "법적 근거")
     _view = st.radio("화면", _VIEWS, horizontal=True,
                      label_visibility="collapsed", key="_adm_view")
 
@@ -1203,7 +1208,7 @@ def main() -> None:
     #   남은 공정 블록은 하루가 끝나갈수록 줄어 결국 0이 된다.
     #   그때 화면을 통째로 숨기면 현재 체감온도도 내일 예보도 볼 수 없다.
     #   관제 화면이 저녁마다 비는 셈이라, 빈 블록은 안내로만 알린다.
-    if _blk_now.empty:
+    if _blk_now.empty and _view in _VIEWS[:3]:
         st.caption("오늘 남은 공정 블록이 없습니다 — 현재 상태와 내일 예보만 표시합니다.")
 
     if _view == _VIEWS[0]:
@@ -1211,23 +1216,20 @@ def main() -> None:
                  show_send=False)
     elif _view == _VIEWS[1]:
         B.render(AD.build_1b(_ctx))
-    else:
+    elif _view == _VIEWS[2]:
         Cc.render(AD.build_1c(_ctx))
 
+    if _view in _VIEWS[:3]:
+        # 전파할 문구는 판정 화면에 딸린 것이다. 기록 화면에서는 보이지 않는다.
+        with st.expander("알람 전달 문구", expanded=False):
+            if _al_now.empty:
+                st.caption("생성된 알람이 없습니다.")
+            else:
+                for _, _a in _al_now.iterrows():
+                    st.caption(f"**{_a['발송시각']} · {_a['대상 블록']}**")
+                    st.code(_a["메시지"], language=None)
 
-    with st.expander("알람 전달 문구", expanded=False):
-        if _al_now.empty:
-            st.caption("생성된 알람이 없습니다.")
-        else:
-            for _, _a in _al_now.iterrows():
-                st.caption(f"**{_a['발송시각']} · {_a['대상 블록']}**")
-                st.code(_a["메시지"], language=None)
-
-    # 판정 화면이 보여주는 것과 겹치지 않는 것만 남긴다.
-    # 오늘·내일 상세는 위 세 화면이 이미 담고 있다.
-    t8, t7, t3 = st.tabs([_rtab, "📝 조치 기록", "📖 법적 근거"])
-
-    with t8:
+    if _view == _VIEWS[3]:
         W.render_admin()
 
         st.divider()
@@ -1275,7 +1277,7 @@ def main() -> None:
 
 
 
-    with t7:
+    if _view == _VIEWS[4]:
         _b = build_blocks(today_df, today, conservative) if not today_df.empty \
             else pd.DataFrame()
         # 기록·보관은 법적 의무(제562조제2항제3호)다.
@@ -1292,7 +1294,7 @@ def main() -> None:
                  int(roster["옥외작업"].sum()) if not roster.empty else 0,
                  lambda b: rest_slots(b, strict), tier_by_code, classify)
 
-    with t3:
+    if _view == _VIEWS[5]:
         st.dataframe(pd.DataFrame([{
             "체감온도": f"{t.min_temp:.0f}℃ 이상", "등급": t.label,
             "휴식": (f"{t.cycle_hours:.0f}시간마다 {t.rest_minutes}분"
