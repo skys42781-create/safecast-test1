@@ -2,6 +2,21 @@
 .streamlit/secrets.toml
 *.env
 
+# 👤 개인정보 — 이 레포(public)에 두지 않는다
+#
+#   worker_survey.csv  이름·생년월일·소속·작업구역·공종
+#   worker_reports.csv 이름·생년월일·작업구역·증상개수
+#
+#   성명과 생년월일 조합은 개인을 특정한다. 동명이인을 구분하려고
+#   생년월일을 받는다는 건 그 조합이 고유 식별자라는 뜻이기도 하다.
+#   신고 기록에는 증상 개수까지 들어가므로 더 민감하다.
+#
+#   실제 저장 위치는 private 레포(safecast-data)이며,
+#   worker.py 가 secrets 의 GH_REPO 를 보고 그쪽에 쓴다.
+#   여기 규칙은 로컬 작업 중 실수로 커밋되는 것을 막기 위한 이중 안전장치다.
+data/worker_survey.csv
+data/worker_reports.csv
+
 # Python
 __pycache__/
 *.py[cod]

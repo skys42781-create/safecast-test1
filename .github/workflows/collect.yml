@@ -44,7 +44,10 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/
+          # ⚠️ data/ 를 통째로 add 하면 근로자 명부·신고 기록처럼
+          #    개인정보가 담긴 파일까지 public 레포에 커밋된다.
+          #    이 워크플로가 만드는 것은 예보와 실황뿐이므로 그 둘만 지정한다.
+          git add data/forecast_log.csv data/obs_log.csv
           if git diff --staged --quiet; then
             echo "변경 없음 — 커밋 생략"
             exit 0
