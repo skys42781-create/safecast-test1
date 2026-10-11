@@ -35,6 +35,7 @@ import admin_1c as Cc
 import admin_data as AD
 import correction as C
 import hero as HERO
+import recipients as RC
 import records as R
 import worker as W
 import snapshot as SNAP
@@ -1200,7 +1201,7 @@ def main() -> None:
     #   예전처럼 아래에 늘 붙여 두면 어느 화면을 골라도 같은 것이 따라와
     #   화면을 고른 의미가 없어진다.
     _VIEWS = ("블록 스트립", "시각 축 타임라인", "관제 시트",
-              _rtab.replace("🚨 ", ""), "조치 기록", "법적 근거")
+              _rtab.replace("🚨 ", ""), "조치 기록", "문자 알림", "법적 근거")
     _view = st.radio("화면", _VIEWS, horizontal=True,
                      label_visibility="collapsed", key="_adm_view")
 
@@ -1295,6 +1296,10 @@ def main() -> None:
                  lambda b: rest_slots(b, strict), tier_by_code, classify)
 
     if _view == _VIEWS[5]:
+        UI.section("문자 알림", "알람을 수신자에게 문자로 보냅니다")
+        RC.render_admin(_al_now, now=now)
+
+    if _view == _VIEWS[6]:
         st.dataframe(pd.DataFrame([{
             "체감온도": f"{t.min_temp:.0f}℃ 이상", "등급": t.label,
             "휴식": (f"{t.cycle_hours:.0f}시간마다 {t.rest_minutes}분"
