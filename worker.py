@@ -41,7 +41,7 @@ SURVEY_PATH = "data/worker_survey.csv"
 REPORT_PATH = "data/worker_reports.csv"
 
 SURVEY_COLS = ["등록시각", "이름", "생년월일", "소속", "작업구역", "공종",
-               "연령", "투입일차", "복귀자"]
+               "연령", "투입일차", "복귀자", "연락처"]
 REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
                "증상개수", "처리상태"]
 
@@ -57,7 +57,7 @@ REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
 #   투입일차도 같은 이유로 4가 4.0이 된다. 열순응 제한율 계산에 쓰이는
 #   값이라 화면과 명단에 그대로 노출된다.
 TEXT_COLS = ["이름", "생년월일", "소속", "작업구역", "공종",
-             "투입일차", "복귀자", "처리상태"]
+             "투입일차", "복귀자", "처리상태", "연락처"]
 
 STATUS = ["미확인", "확인함", "조치완료"]
 
@@ -138,7 +138,14 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
         col = df[c].fillna("").astype(str).fillna("").str.strip()
         # 19880323.0 → 19880323 (정수에 .0 이 붙은 경우만)
         col = col.str.replace(r"^(\d+)\.0$", r"\1", regex=True)
-        df[c] = col.replace({"nan": "", "None": "", "<NA>": "", "NaN": ""})
+        col = col.replace({"nan": "", "None": "", "<NA>": "", "NaN": ""})
+        if c == "연락처":
+            # 숫자로 읽히면 앞자리 0이 떨어져 1012345678 이 된다.
+            # 그대로 두면 유효하지 않은 번호가 되어 문자가 안 간다.
+            col = col.map(lambda v: "0" + v
+                          if v and v.isdigit() and len(v) in (9, 10)
+                          and not v.startswith("0") else v)
+        df[c] = col
     return df
 
 
@@ -252,8 +259,13 @@ def find_worker(name: str, birth: str) -> dict | None:
 
 
 def register(name: str, birth: str, org: str, zone: str, trade: str,
-             day: int | None, is_return: bool) -> bool:
-    """연령은 생년월일에서 계산한다. 따로 묻지 않는다."""
+             day: int | None, is_return: bool, phone: str = "") -> bool:
+    """연령은 생년월일에서 계산한다. 따로 묻지 않는다.
+
+    phone: 폭염 알람을 받을 번호. 작업 중에는 화면을 볼 수 없으므로
+           휴식·작업종료 통보는 문자로 간다. 비워 두면 문자를 받지 않는다.
+    """
+    import re as _re
     return _append(SURVEY_PATH, SURVEY_COLS, {
         "등록시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "이름": name.strip(), "생년월일": str(birth).strip(),
@@ -262,6 +274,7 @@ def register(name: str, birth: str, org: str, zone: str, trade: str,
         "연령": age_from(birth),
         "투입일차": day if day else "",
         "복귀자": "예" if is_return else "아니오",
+        "연락처": _re.sub(r"\D", "", str(phone or "")),
     }, f"survey: {name.strip()} 등록")
 
 
@@ -363,6 +376,11 @@ def render_worker_entry() -> dict | None:
     org = c1.text_input("소속 (협력사)", placeholder="○○건설")
     zone = c2.text_input("작업구역", placeholder="3공구")
     trade = c1.text_input("공종", placeholder="철근")
+    # 작업 중에는 화면을 볼 수 없다. 휴식·작업종료 통보는 문자로 간다.
+    phone = c2.text_input("휴대폰 (폭염 알람 수신)",
+                          placeholder="010-1234-5678",
+                          help="휴식 시각과 작업 종료 안내를 문자로 받습니다. "
+                               "비워 두면 문자를 받지 않습니다.")
 
     st.markdown("##### 폭염작업 투입")
     t1, t2 = st.columns(2)
@@ -380,13 +398,14 @@ def render_worker_entry() -> dict | None:
     if st.button("등록하고 시작하기", type="primary", use_container_width=True,
                  disabled=not (org.strip() and zone.strip())):
         if register(name, birth, org, zone, trade, day,
-                    track.startswith("복귀")):
+                    track.startswith("복귀"), phone):
             st.session_state["_worker"] = {
                 "이름": name.strip(), "생년월일": birth.strip(),
                 "소속": org.strip(),
                 "작업구역": zone.strip(), "공종": trade.strip(),
                 "연령": age_from(birth), "투입일차": day if day else "",
                 "복귀자": "예" if track.startswith("복귀") else "아니오",
+                "연락처": phone.strip(),
             }
             st.rerun()
         else:
@@ -506,6 +525,11 @@ GH_BRANCH = "main"''', language="toml")
         view = sv.copy()
         if "생년월일" in view.columns:
             view["생년월일"] = view["생년월일"].astype(str).str[:4] + "****"
+        # 번호도 그대로 띄우지 않는다. 문자 발송은 시스템이 하므로
+        # 관리자가 번호 전체를 볼 일이 없다.
+        if "연락처" in view.columns:
+            view["연락처"] = view["연락처"].astype(str).map(
+                lambda d: f"{d[:3]}-****-{d[-4:]}" if len(d) >= 8 else "")
         with st.expander(f"👷 등록 근로자 · {len(sv)}명", expanded=False):
             import ui as _UI
             _UI.df_cards(view, title="이름",

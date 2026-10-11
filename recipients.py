@@ -204,6 +204,87 @@ def toggle(phone: str) -> tuple[bool, str]:
 
 
 # =====================================================================
+# 수신 대상 자동 산출
+# =====================================================================
+#   [왜 알람마다 다른가]
+#     블록 진입과 휴식은 그 시간에 일하는 사람 모두가 알아야 한다.
+#     반면 열순응 종료는 그 사람 한 명에게만 해당한다.
+#     전부에게 보내면 비용도 늘고, 매번 울리는 문자는 결국 무시당한다.
+#
+#   [관리자는 항상 받는다]
+#     지침은 관리감독자가 조치를 지시하고 이행을 확인하도록 한다.
+#     근로자에게 바로 가더라도 관리자가 모르는 알람이 있어서는 안 된다.
+
+KIND_ALL = "전체"          # 관리자 + 출역 근로자
+KIND_ADMIN = "관리자"      # 관리자만
+KIND_ONE = "지정"          # 관리자 + 지정한 사람
+
+
+def worker_numbers(names: list[str] | None = None) -> list[str]:
+    """근로자 설문에 등록된 번호.
+
+    names 를 주면 그 사람들만 고른다 (열순응 대상자 등).
+    번호를 비워 둔 사람은 문자를 받지 않겠다는 뜻이므로 건너뛴다.
+    """
+    try:
+        import worker as W
+        df = W.load_survey()
+    except Exception:
+        return []
+    if df is None or df.empty or "연락처" not in df.columns:
+        return []
+    if names:
+        want = {str(n).strip() for n in names}
+        df = df[df["이름"].astype(str).str.strip().isin(want)]
+    out, seen = [], set()
+    for v in df["연락처"]:
+        n = SMS.only_digits(v)
+        if SMS.valid_phone(n) and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def resolve(kind: str = KIND_ALL,
+            names: list[str] | None = None) -> tuple[list[str], str]:
+    """보낼 번호와 사람이 읽을 설명을 함께 돌려준다.
+
+    설명을 같이 주는 이유: 관리자가 발송 버튼을 누르기 전에
+    누구에게 가는지 알아야 한다. 숫자만 보여주면 확인이 안 된다.
+    """
+    admins = active_numbers()
+    if kind == KIND_ADMIN:
+        return admins, f"관리자 {len(admins)}명"
+
+    if kind == KIND_ONE:
+        picked = worker_numbers(names)
+        nums = _merge(admins, picked)
+        who = ", ".join(names or []) or "대상 없음"
+        return nums, f"관리자 {len(admins)}명 · {who}"
+
+    workers = worker_numbers()
+    nums = _merge(admins, workers)
+    return nums, f"관리자 {len(admins)}명 · 출역 근로자 {len(workers)}명"
+
+
+def _merge(*groups: list[str]) -> list[str]:
+    """중복 없이 합친다. 한 사람이 두 번 받으면 안 된다."""
+    out, seen = [], set()
+    for g in groups:
+        for n in g:
+            if n not in seen:
+                seen.add(n)
+                out.append(n)
+    return out
+
+
+def estimate(n: int, text: str) -> int:
+    """예상 비용(원). SMS 18원, LMS 45원."""
+    unit = 18 if SMS.body_bytes(text) <= SMS.SMS_LIMIT else 45
+    return n * unit
+
+
+# =====================================================================
 # 발송 기록
 # =====================================================================
 #   [왜 남기는가]
@@ -248,107 +329,157 @@ def log_send(kind: str, result: dict, targets: list[str]) -> bool:
 # 관리자 화면
 # =====================================================================
 
-def render_admin(alarms=None, *, now=None, test_only: bool = False) -> None:
-    """문자 알림 설정·수신자 관리·테스트 발송.
+def render_admin(alarms=None, *, now=None, tbm=None,
+                 blocks=None, lead: int = 20) -> None:
+    """문자 알림 — 수신자 관리·발송.
 
-    alarms: build_alarms() 결과. 없으면 테스트 발송만 가능하다.
+    alarms : build_alarms() 결과
+    tbm    : build_tbm() 결과. 열순응 대상자를 골라내는 데 쓴다.
+    blocks : build_blocks() 결과. 휴식 시각 알람에 쓴다.
     """
     import ui as UI
 
     now = now or datetime.now(KST)
-
-    # ---- 설정 상태 ----
     ok_sms, ok_repo = SMS.is_enabled(), is_enabled()
+
     if not ok_sms:
         st.warning(f"문자 발송이 설정되지 않았습니다 — {SMS.diagnose()}", icon="📵")
         st.caption("Streamlit Cloud → Manage app → Settings → Secrets 에 "
                    "SOLAPI_KEY · SOLAPI_SECRET · SMS_FROM 을 등록하세요.")
     if not ok_repo:
         st.warning(f"수신자 명단을 저장할 수 없습니다 — {_cfg()['why']}", icon="🗄️")
-
     if ok_sms:
         st.caption(f"📡 {SMS.diagnose()}")
 
-    df = load() if ok_repo else pd.DataFrame(columns=COLS)
-    nums = active_numbers(df) if ok_repo else []
+    admins = load() if ok_repo else pd.DataFrame(columns=COLS)
+    n_admin = len(active_numbers(admins)) if ok_repo else 0
+    n_worker = len(worker_numbers())
 
-    UI.stat_row([("등록 수신자", f"{len(df)}명"),
-                 ("발송 대상", f"{len(nums)}명"),
-                 ("예상 단가", "건당 18~45원")])
+    UI.stat_row([("관리자", f"{n_admin}명"),
+                 ("근로자", f"{n_worker}명"),
+                 ("단가", "SMS 18원 · LMS 45원")])
+    if n_worker == 0:
+        st.caption("근로자는 등록 화면에서 휴대폰을 입력한 사람만 집계됩니다.")
 
-    # ---- 테스트 발송 ----
-    # 심사·점검 때 실제 폭염을 기다릴 수 없다. 다만 실제 알람과
-    # 구분되도록 문구와 기록에 테스트임을 남긴다.
-    st.divider()
-    UI.section("테스트 발송", "실제 알람과 구분되는 문구로 나갑니다")
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        go = st.button("지금 테스트 발송", type="primary",
-                       use_container_width=True,
-                       disabled=not (ok_sms and nums), key="_rc_test")
-    with c2:
+    can = ok_sms and (n_admin + n_worker) > 0
+
+    def _fire(kind: str, text: str, nums: list[str], label: str) -> None:
+        """발송하고 결과를 남긴다."""
         if not nums:
-            st.caption("수신자를 먼저 등록하세요.")
-        else:
-            st.caption(f"{len(nums)}명에게 발송됩니다 · "
-                       f"약 {len(nums) * 18}원")
-
-    if go:
-        res = SMS.send(nums, SMS.test_text(now))
+            st.error("보낼 대상이 없습니다.")
+            return
+        res = SMS.send(nums, text)
         if res["ok"]:
-            st.success(f"{res['sent']}건 발송했습니다. "
-                       f"(실패 {res['failed']}건 · {res['cost']:.0f}원)")
+            st.success(f"{res['sent']}건 발송 · {res['cost']:.0f}원"
+                       + (f" · 실패 {res['failed']}건" if res["failed"] else ""))
             if ok_repo:
-                log_send("테스트", res, nums)
+                log_send(kind, res, nums)
         else:
             st.error(f"발송 실패 — {res['why']}")
         for d in res["detail"]:
             st.caption(d)
 
-    # ---- 오늘 알람 발송 ----
-    if not test_only and alarms is not None and not alarms.empty:
-        st.divider()
-        UI.section("오늘 알람", "사전 통보 문구를 그대로 보냅니다")
-        for i, (_, a) in enumerate(alarms.head(4).iterrows()):
-            cc1, cc2 = st.columns([3, 1])
-            with cc1:
-                st.caption(f"**{a['발송시각']}** · {a['대상 블록']} — "
-                           f"판정 {a['체감온도']} {a['등급']}")
-            with cc2:
-                if st.button("발송", key=f"_rc_send_{i}",
-                             disabled=not (ok_sms and nums),
-                             use_container_width=True):
-                    txt = SMS.alarm_text(str(a["대상 블록"]), str(a["체감온도"]),
-                                         str(a["등급"]), 20)
-                    res = SMS.send(nums, txt)
-                    if res["ok"]:
-                        st.success(f"{res['sent']}건 발송")
-                        if ok_repo:
-                            log_send("블록 진입", res, nums)
-                    else:
-                        st.error(res["why"])
+    # ---- 보낼 알람 모으기 ----
+    # 버튼 하나에 대상·문구가 함께 묶여 있어야 한다.
+    # 누르기 전에 누구에게 무엇이 가는지 보이지 않으면 확인이 안 된다.
+    items = []
 
-    # ---- 수신자 관리 ----
+    if alarms is not None and not alarms.empty:
+        for _, a in alarms.head(4).iterrows():
+            txt = SMS.alarm_text(str(a["대상 블록"]), str(a["체감온도"]),
+                                 str(a["등급"]), lead)
+            nums, who = resolve(KIND_ALL)
+            items.append({"key": f"blk{a['발송시각']}", "kind": "블록 진입",
+                          "when": str(a["발송시각"]),
+                          "title": f"{a['대상 블록']} 진입 — 판정 "
+                                   f"{a['체감온도']} {a['등급']}",
+                          "text": txt, "nums": nums, "who": who})
+
+    if blocks is not None and not blocks.empty:
+        import app as _APP  # rest_slots 는 판정 로직 쪽에 있다
+        for _, b in blocks.iterrows():
+            if not b.get("is_work", True):
+                continue
+            for sl in _APP.rest_slots(b, False):
+                txt = SMS.rest_text(str(b["block_name"]).split("(")[0].strip(),
+                                    sl["휴식 시작"], sl["휴식 종료"])
+                nums, who = resolve(KIND_ALL)
+                items.append({"key": f"rest{sl['휴식 시작']}", "kind": "휴식",
+                              "when": sl["휴식 시작"],
+                              "title": f"{b['block_name']} 휴식 "
+                                       f"{sl['휴식 시작']}–{sl['휴식 종료']}",
+                              "text": txt, "nums": nums, "who": who})
+
+    if tbm is not None and not tbm.empty and "성명" in tbm.columns:
+        acc = tbm[tbm["조치사항"].astype(str).str.contains("열순응", na=False)] \
+            if "조치사항" in tbm.columns else tbm.iloc[0:0]
+        for _, t in acc.head(3).iterrows():
+            nm = str(t["성명"])
+            nums, who = resolve(KIND_ONE, [nm])
+            txt = SMS.compose(f"{nm} 님 열순응 작업시간 안내\n"
+                              f"{str(t['조치사항'])[:60]}", prefix=True)
+            items.append({"key": f"acc{nm}", "kind": "열순응",
+                          "when": "-", "title": f"{nm} · 열순응 대상",
+                          "text": txt, "nums": nums, "who": who})
+
     st.divider()
-    UI.section("수신자", "알람을 받을 사람")
+    UI.section("발송", "버튼을 누르면 대상자에게 바로 전송됩니다")
+
+    if not items:
+        st.caption("오늘 보낼 알람이 없습니다. 등급이 올라가는 구간이 생기면 "
+                   "여기에 나타납니다.")
+    for it in items:
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.markdown(
+                f"<div style='font-size:13px;padding:4px 0'>"
+                f"<b>{it['when']}</b> · {it['title']}<br>"
+                f"<span style='color:#7A7A7D;font-size:11.5px'>"
+                f"{it['who']} → {len(it['nums'])}명 · "
+                f"약 {estimate(len(it['nums']), it['text'])}원</span></div>",
+                unsafe_allow_html=True)
+        with c2:
+            if st.button("발송", key=f"_rc_{it['key']}", disabled=not can,
+                         use_container_width=True, type="primary"):
+                _fire(it["kind"], it["text"], it["nums"], it["title"])
+        with st.expander("문구 보기", expanded=False):
+            st.code(it["text"], language=None)
+
+    # ---- 테스트 발송 ----
+    # 심사·점검 때 실제 폭염을 기다릴 수 없다. 실제 알람과 구분되는
+    # 문구로 나가고 기록에도 테스트로 남는다.
+    st.divider()
+    UI.section("테스트 발송", "실제 알람과 구분되는 문구로 나갑니다")
+    tnums, twho = resolve(KIND_ALL)
+    ttext = SMS.test_text(now)
+    tc1, tc2 = st.columns([1, 2])
+    if tc1.button("지금 테스트 발송", use_container_width=True,
+                  disabled=not can, key="_rc_test"):
+        _fire("테스트", ttext, tnums, "테스트")
+    tc2.caption(f"{twho} → {len(tnums)}명 · "
+                f"약 {estimate(len(tnums), ttext)}원")
+
+    # ---- 관리자 수신자 ----
+    st.divider()
+    UI.section("관리자 수신자", "모든 알람을 받습니다")
 
     with st.form("_rc_add", clear_on_submit=True):
         f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
-        name = f1.text_input("이름", placeholder="홍길동")
-        phone = f2.text_input("휴대폰", placeholder="010-1234-5678")
-        role = f3.selectbox("역할", ROLES)
+        nm = f1.text_input("이름", placeholder="홍길동")
+        ph = f2.text_input("휴대폰", placeholder="010-1234-5678")
+        rl = f3.selectbox("역할", ROLES)
         f4.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         if f4.form_submit_button("추가", use_container_width=True,
                                  disabled=not ok_repo):
-            ok, why = add(name, phone, role)
+            ok, why = add(nm, ph, rl)
             (st.success if ok else st.error)(why)
             if ok:
                 st.rerun()
 
-    if df.empty:
-        st.caption("등록된 수신자가 없습니다.")
+    if admins.empty:
+        st.caption("등록된 관리자가 없습니다.")
     else:
-        for _, r in df.iterrows():
+        for _, r in admins.iterrows():
             on = str(r["수신"]).strip() != "아니오"
             rc1, rc2, rc3 = st.columns([4, 1, 1])
             rc1.markdown(
@@ -357,14 +488,17 @@ def render_admin(alarms=None, *, now=None, test_only: bool = False) -> None:
                 f"<span style='color:#7A7A7D'>· {r['역할']}</span>"
                 f"{'' if on else ' <span style=\"color:#B91C1C\">· 수신 중지</span>'}"
                 f"</div>", unsafe_allow_html=True)
-            if rc2.button("중지" if on else "재개",
-                          key=f"_rc_t_{r['번호']}", use_container_width=True):
+            if rc2.button("중지" if on else "재개", key=f"_rc_t_{r['번호']}",
+                          use_container_width=True):
                 toggle(r["번호"])
                 st.rerun()
             if rc3.button("삭제", key=f"_rc_d_{r['번호']}",
                           use_container_width=True):
                 remove(r["번호"])
                 st.rerun()
+
+    st.caption("근로자 번호는 근로자 등록 화면에서 본인이 입력합니다. "
+               "여기서는 관리자만 관리합니다.")
 
     # ---- 발송 기록 ----
     if ok_repo:

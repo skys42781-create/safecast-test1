@@ -1296,8 +1296,9 @@ def main() -> None:
                  lambda b: rest_slots(b, strict), tier_by_code, classify)
 
     if _view == _VIEWS[5]:
-        UI.section("문자 알림", "알람을 수신자에게 문자로 보냅니다")
-        RC.render_admin(_al_now, now=now)
+        UI.section("문자 알림", "알람을 대상자에게 문자로 보냅니다")
+        RC.render_admin(_al_now, now=now, tbm=day_tbm,
+                        blocks=_blk_now, lead=lead)
 
     if _view == _VIEWS[6]:
         st.dataframe(pd.DataFrame([{
