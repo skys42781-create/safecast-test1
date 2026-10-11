@@ -1155,7 +1155,6 @@ def main() -> None:
         today_df = fc[fc["day"] == today]
         tmr_df = fc[fc["day"] == tomorrow]
 
-    _rtab = f"🚨 신고 ({_alerts})" if _alerts else "🚨 신고"
 
     # ---------- 첫 화면 요약 ----------
     # 핵심이 탭 일곱 개에 흩어져 있으면 전체를 파악하는 데 일곱 번을 눌러야
@@ -1197,13 +1196,10 @@ def main() -> None:
     # 한 화면이 한 가지 일만 하도록 나눈다.
     #   앞의 셋은 같은 판정을 다른 각도로 본다(훑기 / 시간축 / 근거).
     #   뒤의 다섯은 서로 다른 일이다.
-    _VIEWS = ("관제", _rtab.replace("🚨 ", ""), "근로자 명단",
+    _VIEWS = ("관제", "신고", "근로자 명단",
               "조치 기록", "문자 알림", "법적 근거")
-    # 라디오를 밑줄 탭으로 바꾼다. 바로 뒤 위젯에만 적용되도록
-    # 빈 마커를 앞에 두고 theme.py 에서 인접 선택자로 잡는다.
-    st.markdown('<div class="sc-nav"></div>', unsafe_allow_html=True)
-    _view = st.radio("화면", _VIEWS, horizontal=True,
-                     label_visibility="collapsed", key="_adm_view")
+    # 미확인 신고 건수는 탭에 숫자로 붙는다. 0건이면 붙지 않는다.
+    _view = UI.nav(_VIEWS, key="_adm_view", alert={"신고": _alerts})
 
     # 블록이 비어도 화면은 그린다.
     #   남은 공정 블록은 하루가 끝나갈수록 줄어 결국 0이 된다.
