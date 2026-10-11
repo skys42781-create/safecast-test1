@@ -39,7 +39,7 @@ PATH = "data/sms_recipients.csv"
 LOG_PATH = "data/sms_log.csv"
 
 COLS = ["등록시각", "이름", "번호", "역할", "수신"]
-LOG_COLS = ["발송시각", "종류", "대상", "성공", "실패", "비용", "내용"]
+LOG_COLS = ["발송시각", "종류", "알람시각", "대상", "성공", "실패", "비용", "내용"]
 
 ROLES = ["안전관리자", "현장소장", "관리감독자", "보건관리자", "기타"]
 
@@ -302,7 +302,45 @@ def load_log() -> pd.DataFrame:
     return df[LOG_COLS]
 
 
-def log_send(kind: str, result: dict, targets: list[str]) -> bool:
+def sent_today(now: datetime | None = None) -> set[str]:
+    """오늘 문자로 나간 알람의 시각 집합.
+
+    발송 기록의 내용에서 "20분 후 'OO' 구간 진입" 같은 문구를 찾지 않고,
+    기록할 때 함께 남긴 알람 시각으로 맞춘다. 문구는 바뀔 수 있지만
+    시각은 알람을 특정하는 값이다.
+    """
+    now = now or datetime.now(KST)
+    try:
+        log = load_log()
+    except Exception:
+        return set()
+    if log is None or log.empty or "알람시각" not in log.columns:
+        return set()
+    today = now.strftime("%Y-%m-%d")
+    mine = log[log["발송시각"].astype(str).str.startswith(today)]
+    return {str(v).strip() for v in mine["알람시각"] if str(v).strip()}
+
+
+def sent_at_map(now: datetime | None = None) -> dict[str, str]:
+    """알람 시각 → 실제 발송 시각."""
+    now = now or datetime.now(KST)
+    try:
+        log = load_log()
+    except Exception:
+        return {}
+    if log is None or log.empty or "알람시각" not in log.columns:
+        return {}
+    today = now.strftime("%Y-%m-%d")
+    out = {}
+    for _, r in log[log["발송시각"].astype(str).str.startswith(today)].iterrows():
+        k = str(r.get("알람시각", "")).strip()
+        if k:
+            out[k] = str(r["발송시각"])[-5:]
+    return out
+
+
+def log_send(kind: str, result: dict, targets: list[str],
+             alarm_time: str = "") -> bool:
     """발송 결과를 기록한다."""
     for _ in range(RETRY):
         df, sha = _read(LOG_PATH, LOG_COLS)
@@ -312,6 +350,9 @@ def log_send(kind: str, result: dict, targets: list[str]) -> bool:
         row = {
             "발송시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
             "종류": kind,
+            # 어느 알람을 보냈는지 가리키는 값. 관제 화면이 이것으로
+            # 발송 여부를 판단한다.
+            "알람시각": str(alarm_time or ""),
             "대상": " ".join(SMS.mask_phone(t) for t in targets[:10]),
             "성공": str(result.get("sent", 0)),
             "실패": str(result.get("failed", 0)),
@@ -363,7 +404,8 @@ def render_admin(alarms=None, *, now=None, tbm=None,
 
     can = ok_sms and (n_admin + n_worker) > 0
 
-    def _fire(kind: str, text: str, nums: list[str], label: str) -> None:
+    def _fire(kind: str, text: str, nums: list[str], label: str,
+              alarm_time: str = "") -> None:
         """발송하고 결과를 남긴다."""
         if not nums:
             st.error("보낼 대상이 없습니다.")
@@ -373,7 +415,7 @@ def render_admin(alarms=None, *, now=None, tbm=None,
             st.success(f"{res['sent']}건 발송 · {res['cost']:.0f}원"
                        + (f" · 실패 {res['failed']}건" if res["failed"] else ""))
             if ok_repo:
-                log_send(kind, res, nums)
+                log_send(kind, res, nums, alarm_time)
         else:
             st.error(f"발송 실패 — {res['why']}")
         for d in res["detail"]:
@@ -441,7 +483,8 @@ def render_admin(alarms=None, *, now=None, tbm=None,
         with c2:
             if st.button("발송", key=f"_rc_{it['key']}", disabled=not can,
                          use_container_width=True, type="primary"):
-                _fire(it["kind"], it["text"], it["nums"], it["title"])
+                _fire(it["kind"], it["text"], it["nums"], it["title"],
+                      it.get("when", ""))
         with st.expander("문구 보기", expanded=False):
             st.code(it["text"], language=None)
 

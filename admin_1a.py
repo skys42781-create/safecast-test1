@@ -366,16 +366,41 @@ def _blocks(d: dict, show_basis: bool, legal_only: bool) -> str:
 # =====================================================================
 
 def _alarm_row(a: dict) -> str:
-    pending = a["status"] != "sent"
-    frame = (f"border:1px solid {TIER_COLOR['심각']};background:rgba(185,28,28,.05)"
-             if pending else f"border-top:1px solid {LINE_IN}")
-    badge = _badge("대기", TIER_COLOR["심각"], solid=True) if pending \
-        else _badge("전파 완료", TIER_COLOR["평시"], solid=False)
+    """알람 한 줄.
+
+    [상태는 시각이 아니라 기록으로 정한다]
+      예전에는 발송시각이 지나면 전파 완료로 바뀌었다. 아무도 보내지
+      않았어도 그렇게 보였기 때문에, 놓친 알람이 처리된 것처럼 묻혔다.
+      이제 문자 발송 기록이 있을 때만 발송됨으로 표시한다.
+
+      '전파 완료'라고 쓰지 않는 이유: 문자를 보낸 것과 현장에 전달되어
+      조치가 이뤄진 것은 다르다. 시스템이 아는 것은 보냈다는 사실뿐이다.
+    """
+    sent = a.get("sent")
+    overdue = a.get("overdue") and not sent
+
+    if sent:
+        frame = f"border-top:1px solid {LINE_IN}"
+        badge = _badge("발송됨", TIER_COLOR["평시"], solid=False)
+    elif overdue:
+        # 시각이 지났는데 보내지 않았다. 가장 눈에 띄어야 하는 상태다.
+        frame = (f"border:1px solid {TIER_COLOR['심각']};"
+                 f"background:rgba(185,28,28,.07)")
+        badge = _badge("미발송", TIER_COLOR["심각"], solid=True)
+    else:
+        frame = f"border:1px solid {LINE};background:rgba(29,31,32,.02)"
+        badge = _badge("예정", TEXT, solid=False)
+
+    note = ""
+    if sent and a.get("sent_at"):
+        note = (f'<div style="font-size:11px;color:{FAINT};margin-top:2px">'
+                f'{_e(a["sent_at"])} 발송</div>')
+
     return f"""
 <div style="display:grid;grid-template-columns:62px 1fr 76px;gap:12px;padding:10px 12px;
      align-items:center;{frame}">
   <span class="sc-num" style="font-weight:600;font-size:19px">{_e(a['time'])}</span>
-  <span style="font-size:12.5px;line-height:1.5">{_e(a['message'])}</span>
+  <div><div style="font-size:12.5px;line-height:1.5">{_e(a['message'])}</div>{note}</div>
   <span style="text-align:right">{badge}</span>
 </div>"""
 
@@ -440,7 +465,8 @@ def render(d: dict, *, legal_only: bool | None = None,
         None이면 이 화면 안에 토글을 만든다. 값을 넘기면 그 값을 쓰고
         토글을 그리지 않는다(사이드바 설정과 따로 놀지 않게).
     show_send:
-        False면 알람 전파 버튼을 숨긴다.
+        False면 발송 버튼을 숨긴다. 함수를 넘기면 버튼을 눌렀을 때
+        그 함수에 알람을 넘겨 실제 문자 발송을 맡긴다.
     chart / sheet:
         () -> None. 차트와 판정 표를 그리는 함수. 넘기지 않으면 생략한다.
     """
@@ -458,8 +484,10 @@ def render(d: dict, *, legal_only: bool | None = None,
            f'블록 내 최고값 기준</span></div>')
         _w(_blocks(d, show_basis, legal_only))
         _w(_bottom(d))
+        sent = _send_row(d, show_send)
         _tail(chart, sheet)
-        return {"sent": [], "legal_only": legal_only, "show_basis": show_basis}
+        return {"sent": sent, "legal_only": legal_only,
+                "show_basis": show_basis}
 
     # 토글은 진짜 위젯이어야 한다 — 화면 상태를 바꾸므로
     head, t1, t2 = st.columns([6, 2, 2])
@@ -477,22 +505,45 @@ def render(d: dict, *, legal_only: bool | None = None,
     _w(_blocks(d, show_basis, legal_only))
     _w(_bottom(d))
 
-    # ---- 사람이 눌러야 하는 것 ----
-    # 자동 전파 금지. 버튼을 눌러야만 상태가 바뀌고 기록에 남는다.
-    sent = []
-    pending = [a for a in d["alarms"] if a["status"] != "sent"] if show_send else []
-    if pending:
-        st.markdown(
-            f'<div class="sc" style="margin-top:18px;font-size:12.5px;color:{MUTED}">'
-            f'대기 중 알람 {len(pending)}건 — 문구를 확인하고 전파하세요.</div>',
-            unsafe_allow_html=True)
-        cols = st.columns(min(len(pending), 4))
-        for col, a in zip(cols, pending):
-            if col.button(f"{a['time']} 전파", key=f"sc_send_{a['time']}"):
-                sent.append(a["time"])
-
+    sent = _send_row(d, show_send)
     _tail(chart, sheet)
     return {"sent": sent, "legal_only": legal_only, "show_basis": show_basis}
+
+
+def _send_row(d: dict, show_send) -> list[str]:
+    """아직 안 보낸 알람을 문자로 보내는 버튼.
+
+    [왜 여기 두는가]
+      알람을 보는 자리가 여기다. 보낼지 말지는 보면서 정하는 일인데
+      문자 화면으로 옮겨가서 다시 찾아야 하면 그 사이에 시각이 지난다.
+
+    show_send 가 함수면 그것을 호출해 실제 발송을 맡긴다.
+    True/False 면 예전처럼 시각만 돌려준다.
+    """
+    todo = [a for a in d["alarms"] if not a.get("sent")] if show_send else []
+    if not todo:
+        return []
+
+    over = sum(1 for a in todo if a.get("overdue"))
+    note = f"미발송 {len(todo)}건"
+    if over:
+        note += f" · 그중 {over}건은 발송시각이 지났습니다"
+    st.markdown(
+        f'<div class="sc" style="margin-top:14px;font-size:12.5px;'
+        f'color:{TIER_COLOR["심각"] if over else MUTED}">{note}</div>',
+        unsafe_allow_html=True)
+
+    out = []
+    cols = st.columns(min(len(todo), 4))
+    for col, a in zip(cols, todo):
+        label = f"{a['time']} 문자 발송"
+        if col.button(label, key=f"sc_send_{a['time']}",
+                      use_container_width=True,
+                      type="primary" if a.get("overdue") else "secondary"):
+            if callable(show_send):
+                show_send(a)
+            out.append(a["time"])
+    return out
 
 
 def _tail(chart, sheet) -> None:

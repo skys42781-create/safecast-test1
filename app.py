@@ -36,6 +36,7 @@ import admin_data as AD
 import correction as C
 import hero as HERO
 import recipients as RC
+import sms as SMS
 import records as R
 import worker as W
 import snapshot as SNAP
@@ -1198,6 +1199,9 @@ def main() -> None:
     #   뒤의 다섯은 서로 다른 일이다.
     _VIEWS = ("관제", _rtab.replace("🚨 ", ""), "근로자 명단",
               "조치 기록", "문자 알림", "법적 근거")
+    # 라디오를 밑줄 탭으로 바꾼다. 바로 뒤 위젯에만 적용되도록
+    # 빈 마커를 앞에 두고 theme.py 에서 인접 선택자로 잡는다.
+    st.markdown('<div class="sc-nav"></div>', unsafe_allow_html=True)
     _view = st.radio("화면", _VIEWS, horizontal=True,
                      label_visibility="collapsed", key="_adm_view")
 
@@ -1211,8 +1215,34 @@ def main() -> None:
                        "현재 상태와 내일 예보만 표시합니다.")
         # 판정·차트·원본 표를 한 화면에 위에서 아래로 쌓는다.
         # 셋은 다른 정보가 아니라 같은 판정을 다른 거리에서 본 것이다.
+        def _send_alarm(a: dict) -> None:
+            """관제 화면에서 바로 문자를 보낸다.
+
+            알람을 보는 자리에서 보낼 수 있어야 한다. 문자 화면으로
+            옮겨가 다시 찾는 사이에 발송시각이 지나기 때문이다.
+            """
+            nums, who = RC.resolve(RC.KIND_ALL)
+            if not nums:
+                st.error("보낼 대상이 없습니다. 문자 알림 화면에서 "
+                         "수신자를 먼저 등록하세요.")
+                return
+            txt = SMS.alarm_text(str(a["message"]).split(" 진입")[0],
+                                 "", "", lead)
+            row = _al_now[_al_now["발송시각"].astype(str) == a["time"]]
+            if not row.empty:
+                r = row.iloc[0]
+                txt = SMS.alarm_text(str(r["대상 블록"]), str(r["체감온도"]),
+                                     str(r["등급"]), lead)
+            res = SMS.send(nums, txt)
+            if res["ok"]:
+                st.success(f"{who} → {res['sent']}건 발송 · {res['cost']:.0f}원")
+                RC.log_send("블록 진입", res, nums, a["time"])
+                RC.load_log.clear()
+            else:
+                st.error(f"발송 실패 — {res['why']}")
+
         A.render(AD.build_1a(_ctx), legal_only=strict, show_basis=True,
-                 show_send=False,
+                 show_send=_send_alarm,
                  chart=lambda: B.render(AD.build_1b(_ctx)),
                  sheet=lambda: Cc.render(AD.build_1c(_ctx)))
 

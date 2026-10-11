@@ -23,6 +23,8 @@ from datetime import datetime
 
 import pandas as pd
 
+from recipients import sent_at_map, sent_today
+
 WEEK = "월화수목금토일"
 
 # TBM 관리등급 → 등급 색 키. admin_* 모듈은 등급명으로 색을 찾는다.
@@ -104,16 +106,34 @@ def _workers(ctx: dict, limit: int) -> list[dict]:
 
 
 def _alarms(ctx: dict, limit: int = 4) -> list[dict]:
+    """알람 목록에 실제 발송 여부를 함께 싣는다.
+
+    [시각 경과가 아니라 기록으로 판단한다]
+      예전에는 발송시각이 지나면 전파 완료로 보였다. 아무도 보내지
+      않았어도 그랬기 때문에 놓친 알람이 처리된 것처럼 묻혔다.
+      문자가 붙은 지금은 시스템이 보낸 사실을 확실히 알 수 있으므로,
+      발송 기록이 있을 때만 발송됨으로 표시한다.
+    """
     al = ctx["alarms"]
     if al is None or al.empty:
         return []
     hm = ctx["now"].strftime("%H:%M")
+
+    done, when = set(), {}
+    try:
+        done = sent_today(ctx["now"])
+        when = sent_at_map(ctx["now"])
+    except Exception:
+        pass
+
     out = []
     for _, a in al.head(limit).iterrows():
-        # 실제 전파 여부는 기록하지 않는다. 시스템이 스스로 전파했다고
-        # 쓰면 허위 기록이므로 시각 경과만 표시한다.
-        out.append({"time": str(a["발송시각"]),
-                    "status": "sent" if str(a["발송시각"]) <= hm else "pending",
+        t = str(a["발송시각"])
+        out.append({"time": t,
+                    "sent": t in done,
+                    "sent_at": when.get(t, ""),
+                    "overdue": t <= hm,
+                    "status": "sent" if t in done else "pending",
                     "message": f"{a['대상 블록']} 진입 — "
                                f"판정 {a['체감온도']} {a['등급']}"})
     return out
