@@ -219,11 +219,6 @@ def build_1b(ctx: dict) -> dict:
         "rests": rests[:6],
         "alarms": ([{"time": str(_nxt["발송시각"])}] if _nxt is not None else []),
         "basis_notes": _basis_notes(ctx),
-        "metrics": [dict(m, alert=(m["label"] == "미확인 신고" and ctx["alerts"] > 0))
-                    for m in _metrics(ctx)[:3]] +
-                   [{"label": "미확인 신고", "value": f"{ctx['alerts']}건",
-                     "sub": "즉시 현장 확인 필요" if ctx["alerts"] else "접수 없음",
-                     "alert": bool(ctx["alerts"])}],
     }
 
 
@@ -267,17 +262,6 @@ def build_1c(ctx: dict) -> dict:
             "checkable": False, "check_label": "", "done": False,
         })
 
-    blk = []
-    for _, r in blocks.iterrows():
-        t = ctx["tier_by_code"](r["tier_code"])
-        blk.append({"name": str(r["block_name"]).split("(")[0].strip(),
-                    "hours": f"{r['start']:%H}–{r['end']:%H}",
-                    "value": f"{r['at_rep']:.1f}", "tier": t.short,
-                    "tier_label": t.short if r["is_work"] else "비작업",
-                    "is_work": bool(r["is_work"]),
-                    "running": bool(r["start"] <= now < r["end"])})
-
-    rep = ctx.get("report") or {}
     _nxt1c = next_alarm(ctx)
     return {
         "meta_line": (f"{ctx['site']} · 격자 {ctx['grid']} · "
@@ -294,13 +278,6 @@ def build_1c(ctx: dict) -> dict:
         "hourly": hourly,
         "basis_notes": _basis_notes(ctx),
         "demo_notes": _basis_notes({**ctx, "demo": True}),
-        "blocks": blk,
-        "worker_total": len(ctx["tbm_public"]),
-        "workers": _workers(ctx, 5),
-        "report": {"count_open": ctx["alerts"],
-                   "when": rep.get("when", "—"), "where": rep.get("where", "—"),
-                   "who": rep.get("who", "—"), "count": rep.get("count", 0),
-                   "symptoms": rep.get("symptoms", "접수된 신고가 없습니다.")},
         "tbm_distributed": ctx.get("tbm_distributed", "미배포"),
         "is_demo": bool(ctx.get("demo")),
     }

@@ -200,63 +200,6 @@ def _sheet_foot(d: dict, show_basis: bool) -> str:
 # 우: 4개 패널
 # =====================================================================
 
-def _panel(title: str, sub: str, body: str, last: bool = False) -> str:
-    bb = "" if last else f"border-bottom:1px solid {LINE_IN};"
-    sub_html = (f'<span style="font-size:11px;color:{WEAK}">{_e(sub)}</span>') if sub else ""
-    return f"""
-<div style="padding:12px 18px;{bb}">
-  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
-    <span class="sc-cond" style="font-weight:600;font-size:15px">{_e(title)}</span>
-    {sub_html}
-  </div>
-  {body}
-</div>"""
-
-
-def _block_summary(blocks: list[dict]) -> str:
-    rows = []
-    for b in blocks:
-        work = b.get("is_work", True)
-        color = TIER_COLOR.get(b["tier"], NONWORK) if work else WEAK
-        w = "700" if b.get("running") else "400"
-        c = WEAK if not work else TEXT
-        rows.append(f"""
-<div style="display:grid;grid-template-columns:1fr 46px 56px;gap:6px;padding:5px 0;
-     font-size:12px;font-weight:{w};color:{c};border-top:1px solid {LINE_IN}">
-  <span>{_e(b['name'])} <span style="color:{WEAK}">{_e(b['hours'])}</span></span>
-  <span style="text-align:right">{_e(b['value'])}</span>
-  <span style="text-align:right;color:{color};font-weight:700">{_e(b['tier_label'])}</span>
-</div>""")
-    return "".join(rows)
-
-
-def _worker_rows(ws: list[dict]) -> str:
-    rows = []
-    for w in ws:
-        color = TIER_COLOR.get(w.get("risk", "주의"), NONWORK)
-        rows.append(f"""
-<div style="display:grid;grid-template-columns:52px 1fr 60px;gap:6px;padding:5px 0;
-     font-size:12px;border-top:1px solid {LINE_IN}">
-  <span style="font-weight:700">{_e(w['name'])}</span>
-  <span style="color:{MUTED}">{_e(w['types'])}</span>
-  <span style="text-align:right;font-weight:700;color:{color}">{_e(w['status'])}</span>
-</div>""")
-    return "".join(rows)
-
-
-def _report_card(r: dict) -> str:
-    return f"""
-<div style="border:1px solid {TIER_COLOR['심각']};background:rgba(185,28,28,.05);
-     padding:10px 12px">
-  <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700">
-    <span>{_e(r['when'])} · {_e(r['where'])} · {_e(r['who'])}</span>
-    <span>증상 {_e(r['count'])}개</span>
-  </div>
-  <div style="font-size:11.5px;color:{MUTED};margin-top:6px;line-height:1.5">
-    {_e(r['symptoms'])}</div>
-</div>"""
-
-
 def _record_rows(d: dict) -> str:
     """기록 상태를 표에서 직접 센다.
 
@@ -291,38 +234,22 @@ def _record_rows(d: dict) -> str:
     return "".join(out)
 
 
-def _right(d: dict) -> str:
-    rep = d["report"]
-    report_body = (
-        f'<div style="margin-bottom:8px">'
-        f'{_badge(f"미확인 {rep["count_open"]}건", TIER_COLOR["심각"])}</div>'
-        + _report_card(rep))
-    return f"""
-<div>
-  {_panel("블록 요약", "", _block_summary(d["blocks"]))}
-  {_panel(f"관리 대상 {d['worker_total']}명", "민감군 8유형 자동 선별", _worker_rows(d["workers"]))}
-  {_panel("근로자 신고", "", report_body)}
-  {_panel("기록 상태", "", _record_rows(d), last=True)}
-</div>"""
-
-
 # =====================================================================
 # 렌더
 # =====================================================================
 
-def _check_head(done: int, total: int) -> str:
-    """체크 패널 머리글. 표의 마지막 구획처럼 이어 붙인다."""
-    color = TIER_COLOR["평시"] if done == total else TIER_COLOR["주의"]
-    return (f'<div class="sc" style="display:flex;justify-content:space-between;'
-            f'align-items:center;height:{HEAD_H}px;padding:0 14px;'
-            f'background:rgba(29,31,32,.05);border-top:1px solid {LINE};'
-            f'border-left:1px solid {LINE};border-right:1px solid {LINE}">'
-            f'<span class="sc-label" style="font-size:10.5px">조치 · 이행 체크</span>'
-            f'<span style="font-size:11px;font-weight:700;color:{color}">'
-            f'수동 {done}/{total}</span></div>')
-
-
 def render(d: dict) -> dict:
+    """관제 시트.
+
+    [오른쪽 패널을 걷어낸 이유]
+      블록 요약은 블록 스트립과, 관리 대상은 그 화면의 TBM 패널과,
+      근로자 신고는 신고 화면과 같은 내용이었다. 같은 것을 두 군데
+      두면 한쪽만 고쳤을 때 숫자가 어긋나고, 정작 이 화면의 존재 이유인
+      시각별 판정 표가 절반 폭으로 눌렸다.
+
+      기록 상태만 남긴다. 자동과 수동을 구분해 보여주는 것은
+      판정 원칙 2의 UI 표현이라 다른 화면에 없다.
+    """
     inject_css()
     _sheet_widget_css()
     st.markdown(f'<style>.block-container{{max-width:{SHEET_CANVAS}px !important}}</style>',
@@ -333,47 +260,29 @@ def render(d: dict) -> dict:
     _, t1 = st.columns([8, 2])
     show_basis = t1.toggle("근거 표시", value=True, key="sc1c_basis")
 
-    left, right = st.columns([1.55, 1], gap="small")
+    _w(_sheet_title(d))
+    _w(_sheet_body(d))
+    _w(_sheet_foot(d, show_basis))
 
-    checked = {}
+    # ---- 기록 상태 ----
+    st.divider()
+    _w(f'<div class="sc" style="display:flex;justify-content:space-between;'
+       f'align-items:baseline;padding:0 0 8px">'
+       f'<span class="sc-cond" style="font-weight:600;font-size:15px">기록 상태</span>'
+       f'<span style="font-size:11px;color:{WEAK}">'
+       f'제562조제2항제3호 — 일자별 기록·연말까지 보관</span></div>')
+    _w(f'<div class="sc sc-bp" style="padding:10px 16px">{_corners()}'
+       f'{_record_rows(d)}</div>')
+
     locked = d.get("is_demo", False)
+    a1, a2, _sp = st.columns([1.3, 1.1, 4])
+    export = a1.button("오늘 기록 내보내기", key="sc1c_export", disabled=locked)
+    legal = a2.button("법적 근거 보기", key="sc1c_legal", type="secondary")
+    if locked:
+        st.caption("데모 데이터는 기록으로 내보낼 수 없습니다.")
 
-    with left:
-        _w(_sheet_title(d))
-        _w(_sheet_body(d))          # 이행 열 포함 — 항상 정렬이 맞는다
-        _w(_sheet_foot(d, show_basis))
-
-        # ---- 사람이 눌러야 하는 것 ----
-        # 위젯을 표 행에 맞추는 건 Streamlit에서 유지되지 않는다.
-        # 표는 상태만 보여주고, 입력은 정렬에 의존하지 않는 패널에서 받는다.
-        items = [r for r in d["hourly"] if r.get("checkable")]
-        done_now = sum(1 for r in items if r.get("done"))
-        _w(_check_head(done_now, len(items)))
-
-        c1, c2 = st.columns(2, gap="small")
-        for i, r in enumerate(items):
-            with (c1 if i % 2 == 0 else c2):
-                checked[r["hour"]] = st.checkbox(
-                    f"{r['hour']}시 · {r['check_label']}",
-                    value=r.get("done", False),
-                    key=f"sc1c_chk_{r['hour']}", disabled=locked)
-
-        note = ("데모 데이터에서는 이행 체크를 기록할 수 없습니다."
-                if locked else
-                "관리자 수동 입력 — 체크 시각과 작성자가 함께 기록됩니다.")
-        _w(f'<div class="sc" style="padding:8px 0 2px;font-size:11px;'
-           f'color:{TIER_COLOR["심각"] if locked else WEAK}">{note}</div>')
-
-        a1, a2, a3 = st.columns([1.3, 1.1, 1.5])
-        export = a1.button("오늘 기록 내보내기", key="sc1c_export", disabled=locked)
-        legal = a2.button("법적 근거 보기", key="sc1c_legal", type="secondary")
-        ack = a3.button("신고 확인 · 조치 입력", key="sc1c_ack", type="secondary")
-
-    with right:
-        _w(f'<div class="sc sc-bp" style="margin-top:44px">{_corners()}{_right(d)}</div>')
-
-    return {"checked": checked, "export": export, "legal": legal, "ack": ack,
-            "show_basis": show_basis}
+    return {"checked": {}, "export": export, "legal": legal,
+            "ack": False, "show_basis": show_basis}
 
 
 # =====================================================================

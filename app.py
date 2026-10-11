@@ -366,13 +366,6 @@ def call_kma(path: str, params: dict) -> dict:
     raise RuntimeError(mask_secret(" / ".join(errs)))
 
 
-def api_get(url: str, params: dict) -> dict:
-    """하위 호환 래퍼. 새 코드는 call_kma()를 쓴다."""
-    path = url.rsplit("/", 1)[-1]
-    p = {k: v for k, v in params.items() if k not in ("authKey", "serviceKey")}
-    return call_kma(path, p)
-
-
 def now_kst() -> datetime:
     return datetime.now(KST).replace(tzinfo=None)
 
@@ -1200,8 +1193,12 @@ def main() -> None:
     #   앞의 셋은 판정 화면, 뒤의 셋은 기록·관리 화면이다.
     #   예전처럼 아래에 늘 붙여 두면 어느 화면을 골라도 같은 것이 따라와
     #   화면을 고른 의미가 없어진다.
+    # 한 화면이 한 가지 일만 하도록 나눈다.
+    #   앞의 셋은 같은 판정을 다른 각도로 본다(훑기 / 시간축 / 근거).
+    #   뒤의 다섯은 서로 다른 일이다.
     _VIEWS = ("블록 스트립", "시각 축 타임라인", "관제 시트",
-              _rtab.replace("🚨 ", ""), "조치 기록", "문자 알림", "법적 근거")
+              _rtab.replace("🚨 ", ""), "근로자 명단",
+              "조치 기록", "문자 알림", "법적 근거")
     _view = st.radio("화면", _VIEWS, horizontal=True,
                      label_visibility="collapsed", key="_adm_view")
 
@@ -1233,8 +1230,20 @@ def main() -> None:
     if _view == _VIEWS[3]:
         W.render_admin()
 
-        st.divider()
-        UI.section("TBM 상세", "명부 설정 · 컨디션 체크 · 전체 명단")
+    if _view == _VIEWS[4]:
+        UI.section("근로자 명단", "등록 현황 · 민감군 선별 · 보건 정보 병합")
+
+        # 문자 알림이 닿는 범위를 여기서 바로 보여준다.
+        # 명단 화면에서 "누가 알람을 못 받는가"를 알 수 있어야
+        # 등록을 독려할 수 있다.
+        _n_phone = len(RC.worker_numbers())
+        UI.stat_row([("등록 근로자", f"{len(roster)}명"),
+                     ("알람 수신", f"{_n_phone}명"),
+                     ("출처", roster_src or "미연동")])
+        if len(roster) and _n_phone < len(roster):
+            st.caption(f"휴대폰을 입력하지 않은 {len(roster) - _n_phone}명은 "
+                       f"문자 알람을 받지 못합니다. 등록 화면에서 입력할 수 있습니다.")
+
         # 명부 교체·병합은 매번 볼 내용이 아니다. 접어 두고 헤더에 현황만 남긴다.
         with st.expander(f"📋 명부 설정 · {roster_src} {len(roster)}명",
                          expanded=False):
@@ -1276,9 +1285,7 @@ def main() -> None:
 
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
 
-
-
-    if _view == _VIEWS[4]:
+    if _view == _VIEWS[5]:
         _b = build_blocks(today_df, today, conservative) if not today_df.empty \
             else pd.DataFrame()
         # 기록·보관은 법적 의무(제562조제2항제3호)다.
@@ -1295,12 +1302,12 @@ def main() -> None:
                  int(roster["옥외작업"].sum()) if not roster.empty else 0,
                  lambda b: rest_slots(b, strict), tier_by_code, classify)
 
-    if _view == _VIEWS[5]:
+    if _view == _VIEWS[6]:
         UI.section("문자 알림", "알람을 대상자에게 문자로 보냅니다")
         RC.render_admin(_al_now, now=now, tbm=day_tbm,
                         blocks=_blk_now, lead=lead)
 
-    if _view == _VIEWS[6]:
+    if _view == _VIEWS[7]:
         st.dataframe(pd.DataFrame([{
             "체감온도": f"{t.min_temp:.0f}℃ 이상", "등급": t.label,
             "휴식": (f"{t.cycle_hours:.0f}시간마다 {t.rest_minutes}분"

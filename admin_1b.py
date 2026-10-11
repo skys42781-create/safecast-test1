@@ -267,26 +267,14 @@ def _chart(d: dict, show_basis: bool) -> str:
 </div>"""
 
 
-def _metrics(d: dict) -> str:
-    cells = []
-    for m in d["metrics"]:
-        alert = m.get("alert")
-        frame = (f"border:1px solid {TIER_COLOR['심각']};background:rgba(185,28,28,.05)"
-                 if alert else f"border:1px solid {LINE}")
-        vcolor = TIER_COLOR["심각"] if alert else TEXT
-        cells.append(f"""
-<div class="sc-bp" style="{frame};padding:14px 16px">
-  {_corners()}
-  <div class="sc-label">{_e(m['label'])}</div>
-  <div class="sc-num" style="font-weight:600;font-size:32px;line-height:1.1;color:{vcolor}">
-    {_e(m['value'])}</div>
-  <div style="font-size:12px;color:{MUTED}">{_e(m['sub'])}</div>
-</div>""")
-    return (f'<div class="sc" style="display:grid;grid-template-columns:repeat(4,1fr);'
-            f'gap:12px;margin-top:18px">{"".join(cells)}</div>')
-
-
 def render(d: dict) -> dict:
+    """시각 축 타임라인.
+
+    [하단 지표를 뺀 이유]
+      같은 네 칸이 블록 스트립 히어로에 이미 있다. 이 화면의 값어치는
+      등급 경계선·블록·휴식·알람이 한 축 위에 놓인다는 것 하나뿐이므로,
+      차트를 넓게 쓰고 나머지는 덜어낸다.
+    """
     inject_css()
     _w(_topbar(d))
 
@@ -294,7 +282,6 @@ def render(d: dict) -> dict:
     show_basis = t1.toggle("근거 표시", value=True, key="sc1b_basis")
 
     _w(_chart(d, show_basis))
-    _w(_metrics(d))
     return {"show_basis": show_basis}
 
 
