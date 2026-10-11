@@ -422,19 +422,27 @@ def _bottom(d: dict) -> str:
 
 def render(d: dict, *, legal_only: bool | None = None,
            show_basis: bool | None = None,
-           show_send: bool = True) -> dict:
-    """1a 화면을 그리고, 관리자가 누른 동작을 돌려준다.
+           show_send: bool = True,
+           chart=None, sheet=None) -> dict:
+    """관제 화면 전체.
+
+    [왜 한 화면인가]
+      판정·차트·원본 표를 따로 두면 관리자가 같은 상황을 보려고
+      화면을 세 번 옮겨야 한다. 셋은 다른 정보가 아니라 같은 판정을
+      다른 거리에서 본 것이므로, 훑는 순서대로 위에서 아래로 쌓는다.
+
+        히어로 → 블록 카드 → 알람·명단 → 차트 → 시각별 원본
+
+      전부 펼쳐 둔다. 한 화면을 끝까지 내리면 판정 근거까지 모두 나오므로,
+      심사·점검에서 "근거가 어디 있느냐"는 물음에 화면을 옮기지 않고 답할 수 있다.
 
     legal_only / show_basis:
         None이면 이 화면 안에 토글을 만든다. 값을 넘기면 그 값을 쓰고
-        토글을 그리지 않는다. app.py처럼 사이드바에 이미 같은 설정이
-        있는 경우 두 개가 따로 놀지 않게 하기 위한 것이다.
-
+        토글을 그리지 않는다(사이드바 설정과 따로 놀지 않게).
     show_send:
-        False면 알람 전파 버튼을 숨긴다. 전파 기록을 남길 저장소가
-        아직 없는 동안에는 버튼만 있고 기록이 안 되므로 띄우지 않는다.
-
-    반환: {"sent": [전파된 알람 시각], "legal_only": bool, "show_basis": bool}
+        False면 알람 전파 버튼을 숨긴다.
+    chart / sheet:
+        () -> None. 차트와 판정 표를 그리는 함수. 넘기지 않으면 생략한다.
     """
     inject_css()
 
@@ -450,6 +458,7 @@ def render(d: dict, *, legal_only: bool | None = None,
            f'블록 내 최고값 기준</span></div>')
         _w(_blocks(d, show_basis, legal_only))
         _w(_bottom(d))
+        _tail(chart, sheet)
         return {"sent": [], "legal_only": legal_only, "show_basis": show_basis}
 
     # 토글은 진짜 위젯이어야 한다 — 화면 상태를 바꾸므로
@@ -482,7 +491,27 @@ def render(d: dict, *, legal_only: bool | None = None,
             if col.button(f"{a['time']} 전파", key=f"sc_send_{a['time']}"):
                 sent.append(a["time"])
 
+    _tail(chart, sheet)
     return {"sent": sent, "legal_only": legal_only, "show_basis": show_basis}
+
+
+def _tail(chart, sheet) -> None:
+    """차트와 시각별 원본을 아래에 붙인다."""
+    if chart is not None:
+        st.divider()
+        _w(f'<div class="sc" style="padding-bottom:6px">'
+           f'<span class="sc-cond" style="font-weight:600;font-size:17px">시각 축</span>'
+           f'<span style="font-size:11.5px;color:{WEAK};margin-left:10px">'
+           f'등급 경계선 · 블록 · 휴식 · 알람이 같은 축 위에</span></div>')
+        chart()
+
+    if sheet is not None:
+        st.divider()
+        _w(f'<div class="sc" style="padding-bottom:6px">'
+           f'<span class="sc-cond" style="font-weight:600;font-size:17px">판정 원본</span>'
+           f'<span style="font-size:11.5px;color:{WEAK};margin-left:10px">'
+           f'시각별 예보와 그 판정 근거</span></div>')
+        sheet()
 
 
 # =====================================================================

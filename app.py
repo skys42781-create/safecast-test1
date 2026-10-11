@@ -1196,8 +1196,7 @@ def main() -> None:
     # 한 화면이 한 가지 일만 하도록 나눈다.
     #   앞의 셋은 같은 판정을 다른 각도로 본다(훑기 / 시간축 / 근거).
     #   뒤의 다섯은 서로 다른 일이다.
-    _VIEWS = ("블록 스트립", "시각 축 타임라인", "관제 시트",
-              _rtab.replace("🚨 ", ""), "근로자 명단",
+    _VIEWS = ("관제", _rtab.replace("🚨 ", ""), "근로자 명단",
               "조치 기록", "문자 알림", "법적 근거")
     _view = st.radio("화면", _VIEWS, horizontal=True,
                      label_visibility="collapsed", key="_adm_view")
@@ -1206,19 +1205,19 @@ def main() -> None:
     #   남은 공정 블록은 하루가 끝나갈수록 줄어 결국 0이 된다.
     #   그때 화면을 통째로 숨기면 현재 체감온도도 내일 예보도 볼 수 없다.
     #   관제 화면이 저녁마다 비는 셈이라, 빈 블록은 안내로만 알린다.
-    if _blk_now.empty and _view in _VIEWS[:3]:
-        st.caption("오늘 남은 공정 블록이 없습니다 — 현재 상태와 내일 예보만 표시합니다.")
-
     if _view == _VIEWS[0]:
+        if _blk_now.empty:
+            st.caption("오늘 남은 공정 블록이 없습니다 — "
+                       "현재 상태와 내일 예보만 표시합니다.")
+        # 판정·차트·원본 표를 한 화면에 위에서 아래로 쌓는다.
+        # 셋은 다른 정보가 아니라 같은 판정을 다른 거리에서 본 것이다.
         A.render(AD.build_1a(_ctx), legal_only=strict, show_basis=True,
-                 show_send=False)
-    elif _view == _VIEWS[1]:
-        B.render(AD.build_1b(_ctx))
-    elif _view == _VIEWS[2]:
-        Cc.render(AD.build_1c(_ctx))
+                 show_send=False,
+                 chart=lambda: B.render(AD.build_1b(_ctx)),
+                 sheet=lambda: Cc.render(AD.build_1c(_ctx)))
 
-    if _view in _VIEWS[:3]:
         # 전파할 문구는 판정 화면에 딸린 것이다. 기록 화면에서는 보이지 않는다.
+        st.divider()
         with st.expander("알람 전달 문구", expanded=False):
             if _al_now.empty:
                 st.caption("생성된 알람이 없습니다.")
@@ -1227,10 +1226,10 @@ def main() -> None:
                     st.caption(f"**{_a['발송시각']} · {_a['대상 블록']}**")
                     st.code(_a["메시지"], language=None)
 
-    if _view == _VIEWS[3]:
+    if _view == _VIEWS[1]:
         W.render_admin()
 
-    if _view == _VIEWS[4]:
+    if _view == _VIEWS[2]:
         UI.section("근로자 명단", "등록 현황 · 민감군 선별 · 보건 정보 병합")
 
         # 문자 알림이 닿는 범위를 여기서 바로 보여준다.
@@ -1285,7 +1284,7 @@ def main() -> None:
 
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
 
-    if _view == _VIEWS[5]:
+    if _view == _VIEWS[3]:
         _b = build_blocks(today_df, today, conservative) if not today_df.empty \
             else pd.DataFrame()
         # 기록·보관은 법적 의무(제562조제2항제3호)다.
@@ -1302,12 +1301,12 @@ def main() -> None:
                  int(roster["옥외작업"].sum()) if not roster.empty else 0,
                  lambda b: rest_slots(b, strict), tier_by_code, classify)
 
-    if _view == _VIEWS[6]:
+    if _view == _VIEWS[4]:
         UI.section("문자 알림", "알람을 대상자에게 문자로 보냅니다")
         RC.render_admin(_al_now, now=now, tbm=day_tbm,
                         blocks=_blk_now, lead=lead)
 
-    if _view == _VIEWS[7]:
+    if _view == _VIEWS[5]:
         st.dataframe(pd.DataFrame([{
             "체감온도": f"{t.min_temp:.0f}℃ 이상", "등급": t.label,
             "휴식": (f"{t.cycle_hours:.0f}시간마다 {t.rest_minutes}분"

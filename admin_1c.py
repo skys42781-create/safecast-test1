@@ -50,75 +50,9 @@ COLS = "38px 60px 44px 50px 46px 1fr 34px"
 # 위젯 스타일 — 제도 시트 문법에 맞춘다
 # =====================================================================
 
-def _sheet_widget_css() -> None:
-    """체크박스를 제도 시트 문법에 맞춘다.
-
-    [왜 전역 선택자인가]
-        st.markdown으로 연 <div>는 Streamlit 위젯을 감싸지 못한다.
-        위젯은 각자 자기 컨테이너에 렌더되므로 클래스 스코프가 걸리지 않는다.
-        이 화면에 체크박스는 이행 체크뿐이므로 전역으로 지정한다.
-    """
-    st.markdown(f"""<style>
-div[data-testid="stCheckbox"] {{ margin: 0 !important; }}
-div[data-testid="stCheckbox"] label {{
-    padding: 4px 0 !important; min-height: 0 !important; align-items: center !important;
-}}
-div[data-testid="stCheckbox"] label p {{
-    font-size: 12px !important; line-height: 1.4 !important;
-    font-family: 'IBM Plex Sans KR',sans-serif !important; color: {TEXT} !important;
-}}
-/* 각진 모서리 + hairline — baseweb 내부 구조가 버전마다 달라 넓게 잡는다 */
-div[data-testid="stCheckbox"] label span[data-baseweb="checkbox"] > span,
-div[data-testid="stCheckbox"] label > div:first-child,
-div[data-testid="stCheckbox"] label > span:first-child {{
-    border-radius: 0 !important;
-    border: 1px solid rgba(29,31,32,.45) !important;
-    width: 14px !important; height: 14px !important;
-    background-color: transparent !important; box-shadow: none !important;
-}}
-div[data-testid="stCheckbox"] label input:checked + span,
-div[data-testid="stCheckbox"] label input:checked ~ div:first-of-type,
-div[data-testid="stCheckbox"] label input:checked ~ span:first-of-type {{
-    background-color: {ACCENT} !important; border-color: {ACCENT} !important;
-}}
-</style>""", unsafe_allow_html=True)
-
-
 # =====================================================================
 # 상단 바
 # =====================================================================
-
-def _metric_box(m: dict, first: bool) -> str:
-    bl = "" if first else f"border-left:1px solid {LINE};"
-    return f"""
-<div style="{bl}padding:8px 16px;text-align:right;min-width:104px">
-  <div class="sc-label" style="font-size:10.5px">{_e(m['label'])}</div>
-  <div class="sc-num" style="font-weight:600;font-size:22px;line-height:1.2">{_e(m['value'])}</div>
-</div>"""
-
-
-def _topbar(d: dict) -> str:
-    boxes = "".join(_metric_box(m, i == 0) for i, m in enumerate(d["metrics"]))
-    demo = ""
-    if d.get("is_demo"):
-        demo = (f'<div style="margin-top:6px">'
-                f'{_badge("데모 데이터 — 실제 판정·기록 근거 아님", TIER_COLOR["심각"])}</div>')
-    return f"""
-<div class="sc" style="display:flex;justify-content:space-between;align-items:flex-end;
-     padding:12px 22px;border-bottom:1px solid {LINE};gap:20px">
-  <div>
-    <div style="display:flex;align-items:baseline;gap:12px">
-      <span class="sc-num" style="font-weight:700;font-size:18px;letter-spacing:.06em">
-        SAFECASTY</span>
-      <span class="sc-label" style="font-size:11px;letter-spacing:.14em">
-        daily heat control sheet</span>
-    </div>
-    <div style="font-size:12px;color:{MUTED};margin-top:4px">{_e(d['meta_line'])}</div>
-    {demo}
-  </div>
-  <div style="display:flex;border:1px solid {LINE}">{boxes}</div>
-</div>"""
-
 
 # =====================================================================
 # 좌: 시각별 판정 원본
@@ -238,51 +172,34 @@ def _record_rows(d: dict) -> str:
 # 렌더
 # =====================================================================
 
-def render(d: dict) -> dict:
-    """관제 시트.
+def render(d: dict, *, show_basis: bool = True) -> dict:
+    """시각별 판정 원본.
 
-    [오른쪽 패널을 걷어낸 이유]
-      블록 요약은 블록 스트립과, 관리 대상은 그 화면의 TBM 패널과,
-      근로자 신고는 신고 화면과 같은 내용이었다. 같은 것을 두 군데
-      두면 한쪽만 고쳤을 때 숫자가 어긋나고, 정작 이 화면의 존재 이유인
-      시각별 판정 표가 절반 폭으로 눌렸다.
-
-      기록 상태만 남긴다. 자동과 수동을 구분해 보여주는 것은
-      판정 원칙 2의 UI 표현이라 다른 화면에 없다.
+    관제 화면 안에 접어 넣는 조각이다. 상단 바와 지표는 그리지 않는다.
+    이 조각의 값어치는 "그때 왜 그렇게 판정했는가"를 한 줄씩 펼치는 것뿐이다.
     """
     inject_css()
-    _sheet_widget_css()
-    st.markdown(f'<style>.block-container{{max-width:{SHEET_CANVAS}px !important}}</style>',
-                unsafe_allow_html=True)
-
-    _w(_topbar(d))
-
-    _, t1 = st.columns([8, 2])
-    show_basis = t1.toggle("근거 표시", value=True, key="sc1c_basis")
 
     _w(_sheet_title(d))
     _w(_sheet_body(d))
     _w(_sheet_foot(d, show_basis))
 
     # ---- 기록 상태 ----
-    st.divider()
+    # 자동과 수동을 구분해 보여주는 것은 판정 원칙 2의 UI 표현이라
+    # 다른 화면에 없다. 표와 함께 둔다.
     _w(f'<div class="sc" style="display:flex;justify-content:space-between;'
-       f'align-items:baseline;padding:0 0 8px">'
+       f'align-items:baseline;padding:14px 0 8px">'
        f'<span class="sc-cond" style="font-weight:600;font-size:15px">기록 상태</span>'
        f'<span style="font-size:11px;color:{WEAK}">'
        f'제562조제2항제3호 — 일자별 기록·연말까지 보관</span></div>')
-    _w(f'<div class="sc sc-bp" style="padding:10px 16px">{_corners()}'
+    _w(f'<div class="sc" style="border:1px solid {LINE};padding:10px 16px">'
        f'{_record_rows(d)}</div>')
 
     locked = d.get("is_demo", False)
-    a1, a2, _sp = st.columns([1.3, 1.1, 4])
-    export = a1.button("오늘 기록 내보내기", key="sc1c_export", disabled=locked)
-    legal = a2.button("법적 근거 보기", key="sc1c_legal", type="secondary")
     if locked:
         st.caption("데모 데이터는 기록으로 내보낼 수 없습니다.")
-
-    return {"checked": {}, "export": export, "legal": legal,
-            "ack": False, "show_basis": show_basis}
+    export = st.button("오늘 기록 내보내기", key="sc1c_export", disabled=locked)
+    return {"export": export, "show_basis": show_basis}
 
 
 # =====================================================================

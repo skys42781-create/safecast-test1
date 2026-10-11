@@ -231,22 +231,6 @@ def build_svg(d: dict) -> str:
 # 화면
 # =====================================================================
 
-def _topbar(d: dict) -> str:
-    return f"""
-<div class="sc" style="display:flex;justify-content:space-between;align-items:center;
-     padding:11px 26px;border-bottom:1px solid {LINE}">
-  <div style="display:flex;align-items:baseline;gap:14px">
-    <span class="sc-num" style="font-weight:700;font-size:19px;letter-spacing:.06em">SAFECASTY</span>
-    <span style="font-size:12.5px;color:{MUTED}">{_e(d['site'])} · {_e(d['date_text'])}</span>
-  </div>
-  <div style="display:flex;align-items:center;gap:10px">
-    <span class="sc-num" style="font-weight:600;font-size:19px">{_e(d['now_text'])}</span>
-    {_badge(d['tier_chip'], TIER_COLOR[d['tier']], solid=True)}
-    {_badge(d['alarm_chip'], TEXT, solid=False)}
-  </div>
-</div>"""
-
-
 def _chart(d: dict, show_basis: bool) -> str:
     basis = ""
     if show_basis:
@@ -267,20 +251,13 @@ def _chart(d: dict, show_basis: bool) -> str:
 </div>"""
 
 
-def render(d: dict) -> dict:
-    """시각 축 타임라인.
+def render(d: dict, *, show_basis: bool = True) -> dict:
+    """시각 축 차트.
 
-    [하단 지표를 뺀 이유]
-      같은 네 칸이 블록 스트립 히어로에 이미 있다. 이 화면의 값어치는
-      등급 경계선·블록·휴식·알람이 한 축 위에 놓인다는 것 하나뿐이므로,
-      차트를 넓게 쓰고 나머지는 덜어낸다.
+    관제 화면 안에 끼워 넣는 조각이다. 상단 바와 지표는 그리지 않는다 —
+    바로 위 히어로가 같은 내용을 이미 보여준다.
     """
     inject_css()
-    _w(_topbar(d))
-
-    _, t1 = st.columns([8, 2])
-    show_basis = t1.toggle("근거 표시", value=True, key="sc1b_basis")
-
     _w(_chart(d, show_basis))
     return {"show_basis": show_basis}
 
