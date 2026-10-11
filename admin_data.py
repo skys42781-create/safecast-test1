@@ -131,8 +131,20 @@ def build_1a(ctx: dict) -> dict:
     for _, r in ctx["blocks"].iterrows():
         t = ctx["tier_by_code"](r["tier_code"])
         sl = ctx["rest_slots"](r, strict) if r["is_work"] else []
-        a = [{"text": tx, "kind": lv, "strong": (lv == "의무" and i == 0)}
-             for i, (lv, tx) in enumerate(t.actions_by(strict))][:3]
+
+        if r["is_work"]:
+            a = [{"text": tx, "kind": lv, "strong": (lv == "의무" and i == 0)}
+                 for i, (lv, tx) in enumerate(t.actions_by(strict))][:3]
+        elif t.short == "평시":
+            # 평시에는 그늘 제공·음료 비치가 의무가 아니다(제567조제2항은 주의부터).
+            # 할 일이 없는데 굵게 띄우면 다른 카드의 굵은 글씨까지 무게를 잃는다.
+            a = [{"text": "휴게 구간 · 별도 조치 없음", "kind": "권고", "strong": False}]
+        else:
+            # 점심·휴게처럼 작업하지 않는 구간에 휴식을 또 배정할 수는 없다.
+            # 이 시간에 관리자가 할 일은 쉴 자리를 갖춰 두는 것이다.
+            a = [{"text": "그늘·냉방 휴게장소 확보", "kind": "의무", "strong": True},
+                 {"text": "소금·음료수 비치 점검", "kind": "의무", "strong": True}]
+
         if sl:
             a.append({"text": " · ".join(f"{x['휴식 시작']}–{x['휴식 종료']}"
                                          for x in sl[:2]),

@@ -261,6 +261,28 @@ def _hero(d: dict) -> str:
 # 3. 공정 블록 5칸
 # =====================================================================
 
+# 조문 표기는 카드에서 걷어낸다.
+#   카드는 훑는 화면이고, 조항은 근거를 따질 때 보는 것이다.
+#   법적 근거 화면과 관제 시트에 전문이 그대로 남아 있다.
+_ARTICLE = re.compile(r"\s*\((?:제|별표)[^)]*\)")
+
+# 시스템이 알아서 남기는 항목. 사람이 할 일이 아니므로 굵게 하지 않는다.
+_AUTO_HINTS = ("기록·보관", "기록 보관", "일자별 기록")
+
+
+def _clean_action(text: str) -> str:
+    """조문을 떼고, 자동으로 되는 항목은 짧게 줄인다."""
+    t = _ARTICLE.sub("", str(text)).strip()
+    if "기록" in t and ("보관" in t or "일자별" in t):
+        # 보관은 시스템이 하므로 '기록'까지만 남긴다.
+        t = t.replace("일자별 ", "").replace("·보관", "").replace(" 보관", "")
+    return t
+
+
+def _is_auto(text: str) -> bool:
+    return any(h in str(text) for h in _AUTO_HINTS)
+
+
 def _block_card(b: dict, show_basis: bool, legal_only: bool) -> str:
     """공정 블록 카드.
 
@@ -286,12 +308,21 @@ def _block_card(b: dict, show_basis: bool, legal_only: bool) -> str:
         else _badge(badge_text, color, solid=True)
 
     # 조치 문구 — 법적 의무만 보기가 켜지면 권고 항목을 숨긴다
+    #
+    # [굵게는 사람이 해야 하는 것에만]
+    #   전부 굵으면 어느 것도 눈에 띄지 않는다. 기록처럼 시스템이
+    #   알아서 남기는 항목까지 굵게 하면 할 일 목록이 흐려진다.
     lines = []
     for a in b.get("actions", []):
         if legal_only and a.get("kind") == "권고":
             continue
-        weight = "700" if a.get("strong") else "400"
-        lines.append(f'<div style="font-weight:{weight}">{_e(a["text"])}</div>')
+        txt = _clean_action(a["text"])
+        if _is_auto(a["text"]):
+            lines.append(f'<div style="color:{WEAK}">{_e(txt)} '
+                         f'<span style="font-size:11px">· 자동</span></div>')
+        else:
+            weight = "700" if a.get("strong") else "400"
+            lines.append(f'<div style="font-weight:{weight}">{_e(txt)}</div>')
     actions = "".join(lines) or f'<div style="color:{WEAK}">—</div>'
 
     basis = ""
@@ -307,8 +338,8 @@ def _block_card(b: dict, show_basis: bool, legal_only: bool) -> str:
           letter-spacing:.01em">{_e(b['hours'])}</span>
     {badge}
   </div>
-  <div class="sc-cond" style="font-weight:600;font-size:14px;color:{MUTED};
-       margin-top:3px">{_e(b['name'])}</div>
+  <div class="sc-cond" style="font-weight:500;font-size:12px;color:{WEAK};
+       margin-top:2px">{_e(b['name'])}</div>
   <div style="margin-top:10px;display:flex;align-items:baseline;gap:6px">
     <span class="sc-num" style="font-weight:600;font-size:30px;color:{value_color};
           line-height:1">{_e(b['value'])}</span>
