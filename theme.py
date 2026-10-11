@@ -170,37 +170,11 @@ div[role="radiogroup"] label {
 }
 div[role="radiogroup"] label:hover { background: #EFF3F7; }
 
-/* ---------- 화면 전환 (.sc-nav 로 감싼 라디오) ----------
-   라디오의 동그라미는 설문 문항처럼 읽힌다. 화면을 고르는 일은
-   선택지를 묻는 것이 아니라 탭을 넘기는 것에 가까우므로,
-   동그라미를 숨기고 밑줄 탭으로 바꾼다. */
-.sc-nav + div div[role="radiogroup"] {
-  gap: 0; border-bottom: 1px solid var(--sc-line); padding: 0;
-  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-}
-.sc-nav + div div[role="radiogroup"]::-webkit-scrollbar { display: none; }
-.sc-nav + div div[role="radiogroup"] label {
-  border: none !important; background: transparent !important;
-  margin: 0 !important; padding: 9px 16px !important;
-  font-size: 13.5px; font-weight: 500; white-space: nowrap;
-  color: rgba(29,31,32,.5);
-  border-bottom: 2px solid transparent !important;
-  transition: color .15s, border-color .15s;
-}
-.sc-nav + div div[role="radiogroup"] label:hover {
-  background: transparent !important; color: var(--sc-ink);
-}
-/* 동그라미 자체를 숨긴다 */
-.sc-nav + div div[role="radiogroup"] label > div:first-child,
-.sc-nav + div div[role="radiogroup"] label [data-baseweb="radio"] > div:first-child {
-  display: none !important;
-}
-/* 선택된 탭 — baseweb 구조가 버전마다 달라 두 선택자를 함께 쓴다 */
-.sc-nav + div div[role="radiogroup"] label:has(input:checked),
-.sc-nav + div div[role="radiogroup"] label[data-checked="true"] {
-  color: var(--sc-ink) !important; font-weight: 600;
-  border-bottom-color: var(--sc-accent) !important;
-}
+/* ---------- 화면 전환 탭 ----------
+   탭 CSS는 여기 없다. ui.nav() 가 직접 넣는다.
+   이유: 경보 배지의 숫자를 CSS content 로 그리기 때문에, 건수를 아는
+   쪽(nav 호출 시점)에서 규칙을 만들어야 한다. key 도 호출할 때
+   정해지므로 선택자를 미리 하드코딩할 수 없다. */
 
 /* ---------- expander ---------- */
 div[data-testid="stExpander"] {

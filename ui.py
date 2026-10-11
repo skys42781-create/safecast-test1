@@ -359,3 +359,136 @@ def list_row(name: str, detail: str, tail: str = "", accent: str = "") -> str:
            f'color:{col};text-align:right">{_esc(tail)}</span>' if tail else
            '<span></span>')
         + '</div>')
+
+
+# =====================================================================
+# 화면 전환
+# =====================================================================
+
+def _st_minor() -> tuple[int, int]:
+    """설치된 Streamlit 의 (major, minor). 읽을 수 없으면 (0, 0)."""
+    try:
+        a, b = st.__version__.split(".")[:2]
+        return int(a), int(b)
+    except Exception:
+        return 0, 0
+
+
+# st-key-{key} 클래스는 Streamlit 1.39 에서 생겼다. 그 아래 버전에서는
+# key 로 버튼을 집어낼 수 없으므로 CSS 로 탭을 그릴 수 없다.
+_KEY_CLASS = _st_minor() >= (1, 39)
+
+# 1.39 미만에서 쓰는 대체 배지. 숫자가 파인 검은 원 글리프라서
+# 글자색을 빨강으로 주면 카톡 배지와 비슷하게 읽힌다.
+_GLYPH = "❶❷❸❹❺❻❼❽❾❿"
+
+_BADGE_BG = "#B91C1C"   # 심각 등급과 같은 빨강 — 앱 안에서 빨강의 뜻을 하나로 유지
+
+
+def _nav_css(key: str, counts: list[int]) -> None:
+    """탭 CSS. 배지 숫자를 content 로 찍기 때문에 건수를 받아야 한다."""
+    base = f'[class*="st-key-{key}_"]'
+    css = f"""
+<style>
+/* 탭 — 테두리와 배경을 지우고 밑줄만 남긴다 */
+{base} button {{
+  border: none !important; background: transparent !important;
+  border-radius: 0 !important; box-shadow: none !important;
+  padding: 9px 4px !important; font-size: 13.5px !important;
+  color: rgba(29,31,32,.5) !important; font-weight: 500 !important;
+  border-bottom: 2px solid transparent !important;
+  transition: color .15s, border-color .15s;
+}}
+{base} button:hover {{
+  background: transparent !important; color: var(--sc-ink) !important;
+}}
+{base} button p {{ display: inline !important; }}
+/* 선택된 탭 */
+[class*="st-key-{key}_on"] button {{
+  color: var(--sc-ink) !important; font-weight: 600 !important;
+  border-bottom-color: var(--sc-accent) !important;
+}}
+/* 탭 사이 간격을 없애 한 줄로 붙인다 */
+div[data-testid="stHorizontalBlock"]:has({base}) {{ gap: 0 !important; }}
+"""
+    # 경보 배지 — 빨간 동그라미 안에 흰 숫자. 버튼 라벨에는 HTML을
+    # 넣을 수 없으므로 ::after 로 그리고 숫자는 content 로 찍는다.
+    for n in sorted(set(counts)):
+        txt = str(n) if n < 100 else "99+"
+        css += f"""
+[class*="st-key-{key}_on_n{n}_"] button::after,
+[class*="st-key-{key}_off_n{n}_"] button::after {{
+  content: "{txt}";
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; min-width: 18px; height: 18px;
+  padding: 0 {5 if n > 9 else 0}px; margin-left: 6px;
+  border-radius: 9px; background: {_BADGE_BG}; color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; vertical-align: middle;
+}}
+[class*="st-key-{key}_on_n{n}_"] button {{
+  border-bottom-color: {_BADGE_BG} !important;
+}}
+"""
+    st.markdown(css + "</style>", unsafe_allow_html=True)
+
+
+def nav(views: list[str] | tuple[str, ...], *, key: str = "_nav",
+        alert: dict[str, int] | None = None) -> str:
+    """밑줄 탭 형태의 화면 선택기.
+
+    [왜 라디오가 아닌가]
+      st.radio 는 동그라미가 붙어 설문 문항처럼 읽힌다. 화면을 고르는
+      일은 선택지를 묻는 것이 아니라 탭을 넘기는 것에 가깝다.
+      라디오의 동그라미를 CSS로 숨기려면 Streamlit 내부 DOM을 깊이
+      파고들어야 하는데, 그 구조는 버전마다 달라 쉽게 깨진다.
+
+      버튼은 다르다. .stButton > button 하나로 닿고, 그 선택자는
+      오래 유지돼 왔다. 선택 여부와 경보 건수를 key 에 담아 두면
+      CSS에서 상태를 구분할 수 있다(st-key-* 클래스, 1.39+).
+
+    alert: {화면명: 건수}. 0보다 크면 그 탭에 빨간 동그라미 배지가 붙는다.
+           놓치면 안 되는 화면(미확인 신고)을 탭 줄에서 바로 알리기 위한 것이다.
+
+    [버전이 낮으면]
+      1.39 미만에서는 st-key-* 가 없어 CSS가 닿지 않는다. 그때는
+      라벨에 ❷ 같은 글리프를 넣고 선택된 탭을 primary 버튼으로
+      칠한다. 모양은 투박해도 어느 탭이 선택됐고 몇 건이 밀렸는지는
+      그대로 보인다.
+    """
+    views = list(views)
+    alert = alert or {}
+    cur = st.session_state.get(key)
+    if cur not in views:
+        cur = views[0]
+        st.session_state[key] = cur
+
+    nums = [int(alert.get(v, 0) or 0) for v in views]
+    if _KEY_CLASS:
+        _nav_css(key, [n for n in nums if n > 0])
+
+    cols = st.columns(len(views), gap="small")
+    for i, (col, v) in enumerate(zip(cols, views)):
+        on = (v == cur)
+        n = nums[i]
+
+        if _KEY_CLASS:
+            # 상태와 건수를 key 에 담는다 → CSS가 셋을 구분한다
+            k = f"{key}_{'on' if on else 'off'}" + (f"_n{n}" if n else "") \
+                + f"_{i}"
+            label, kind = v, "secondary"
+        else:
+            k = f"{key}_{i}"
+            badge = (_GLYPH[n - 1] if 1 <= n <= len(_GLYPH)
+                     else f"({n})") if n else ""
+            label = f"{v} {badge}".strip()
+            kind = "primary" if on else "secondary"
+
+        if col.button(label, key=k, type=kind, use_container_width=True):
+            st.session_state[key] = v
+            st.rerun()
+
+    st.markdown(
+        '<div style="border-bottom:1px solid var(--sc-line);'
+        'margin:-10px 0 18px"></div>', unsafe_allow_html=True)
+    return cur
