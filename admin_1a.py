@@ -262,6 +262,13 @@ def _hero(d: dict) -> str:
 # =====================================================================
 
 def _block_card(b: dict, show_basis: bool, legal_only: bool) -> str:
+    """공정 블록 카드.
+
+    [시각을 블록명보다 앞·크게 둔다]
+      관리자가 카드를 훑을 때 찾는 것은 "몇 시 구간인가"다.
+      오전 1부라는 이름은 그 시각을 부르는 별칭에 가깝다.
+      현장에서 전파할 때도 08시부터라고 말하지 오전 1부라고 하지 않는다.
+    """
     work = b.get("is_work", True)
     color = TIER_COLOR.get(b["tier"], NONWORK) if work else NONWORK
     value_color = color if work else WEAK
@@ -296,10 +303,12 @@ def _block_card(b: dict, show_basis: bool, legal_only: bool) -> str:
 <div class="sc-bp" style="{frame};border-top:3px solid {color};{shadow}padding:16px 16px 14px">
   {_corners()}
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-    <span class="sc-cond" style="font-weight:600;font-size:16px">{_e(b['name'])}</span>
+    <span class="sc-num" style="font-weight:600;font-size:17px;
+          letter-spacing:.01em">{_e(b['hours'])}</span>
     {badge}
   </div>
-  <div style="font-size:12px;color:{WEAK};margin-top:4px">{_e(b['hours'])}</div>
+  <div class="sc-cond" style="font-weight:600;font-size:14px;color:{MUTED};
+       margin-top:3px">{_e(b['name'])}</div>
   <div style="margin-top:10px;display:flex;align-items:baseline;gap:6px">
     <span class="sc-num" style="font-weight:600;font-size:30px;color:{value_color};
           line-height:1">{_e(b['value'])}</span>

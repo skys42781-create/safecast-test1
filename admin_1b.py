@@ -49,8 +49,10 @@ BLOCK_Y, BLOCK_H = 320, 30
 REST_Y, REST_H = 362, 16
 ALARM_Y = 306
 
-LINE_COLOR = "#2c455d"            # 폴리라인
-AREA_COLOR = "#5980a6"            # 하단 면
+# 차트 색 — 흰 종이 위에서 또렷하게 읽혀야 한다.
+#   옅게 두면 프로젝터나 밝은 현장에서 선이 날아간다.
+LINE_COLOR = "#1B2E42"            # 폴리라인 (거의 잉크에 가까운 짙은 남색)
+AREA_COLOR = "#44688C"            # 하단 면
 
 
 def x_at(hour: float) -> float:
@@ -95,7 +97,7 @@ def _bands() -> str:
         y_hi = top_y if hi is None else y_at(hi)
         out.append(
             f'<rect x="{X0}" y="{y_hi:.1f}" width="{x_at(HOUR_MAX) - X0}" '
-            f'height="{y_lo - y_hi:.1f}" fill="{TIER_COLOR[tier]}" opacity="0.065"/>')
+            f'height="{y_lo - y_hi:.1f}" fill="{TIER_COLOR[tier]}" opacity="0.11"/>')
         # 우측 등급명
         if hi is not None or lo == 38.0:
             out.append(
@@ -106,9 +108,9 @@ def _bands() -> str:
         y = y_at(t)
         solid = (t == 33)
         dash = "" if solid else ' stroke-dasharray="4 4"'
-        color = TIER_COLOR["경계"] if solid else "rgba(29,31,32,.3)"
+        color = TIER_COLOR["경계"] if solid else "rgba(29,31,32,.45)"
         out.append(f'<line x1="{X0}" y1="{y:.1f}" x2="{x_at(HOUR_MAX)}" y2="{y:.1f}" '
-                   f'stroke="{color}" stroke-width="{1.4 if solid else 1}"{dash}/>')
+                   f'stroke="{color}" stroke-width="{1.8 if solid else 1.2}"{dash}/>')
         out.append(f'<text x="{X0 - 12}" y="{y + 4:.1f}" text-anchor="end" font-size="13" '
                    f'font-weight="600" fill="{TIER_COLOR.get(_tier_of(t), WEAK)}">{t}</text>')
     return "".join(out)
@@ -132,8 +134,8 @@ def _curve(hourly: list[dict]) -> str:
     base = y_at(TEMP_BOTTOM)
     area = f"{line} {pts[-1][0]:.1f},{base} {pts[0][0]:.1f},{base}"
 
-    out = [f'<polygon points="{area}" fill="{AREA_COLOR}" opacity="0.14"/>',
-           f'<polyline points="{line}" fill="none" stroke="{LINE_COLOR}" stroke-width="2.5"/>']
+    out = [f'<polygon points="{area}" fill="{AREA_COLOR}" opacity="0.22"/>',
+           f'<polyline points="{line}" fill="none" stroke="{LINE_COLOR}" stroke-width="3"/>']
 
     peak = max(hourly, key=lambda h: h["apparent"])
     for h in hourly:
@@ -144,7 +146,7 @@ def _curve(hourly: list[dict]) -> str:
                        f'font-size="15" font-weight="700" fill="{TIER_COLOR["심각"]}">'
                        f'{h["apparent"]} 최고</text>')
         else:
-            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="{LINE_COLOR}"/>')
+            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.4" fill="{LINE_COLOR}"/>')
     return "".join(out)
 
 
