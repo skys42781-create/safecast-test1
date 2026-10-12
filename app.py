@@ -25,7 +25,6 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import requests
 import streamlit as st
 
@@ -76,11 +75,6 @@ ENDPOINTS = [
      "base": "https://apihub.kma.go.kr/api/typ02/openApi/VilageFcstInfoService_2.0",
      "key_param": "authKey", "secret": "KMA_HUB_KEY"},
 ]
-
-# 하위 호환 — 아직 이 상수를 참조하는 곳이 있을 수 있다.
-BASE_URL = ENDPOINTS[0]["base"]
-KEY_PARAM = ENDPOINTS[0]["key_param"]
-
 
 # =====================================================================
 # SECTION 0. 법적 기준 정의
@@ -599,13 +593,6 @@ def build_alarms(blocks: pd.DataFrame, lead: int, trigger: str = "ALERT") -> pd.
 # =====================================================================
 # SECTION 6. UI
 # =====================================================================
-
-# TBM 관리등급을 등급 색으로 옮긴다. 명단에서 색이 곧 우선순위다.
-TIER_BY_LABEL = {
-    "집중관찰": "#B91C1C", "열순응 관리": "#C2410C",
-    "주의 관찰": "#B45309", "관찰": "#B45309",
-}
-
 
 def render_logo() -> None:
     """SAFECASTY 워드마크.
@@ -1156,10 +1143,9 @@ def main() -> None:
         tmr_df = fc[fc["day"] == tomorrow]
 
 
-    # ---------- 첫 화면 요약 ----------
-    # 핵심이 탭 일곱 개에 흩어져 있으면 전체를 파악하는 데 일곱 번을 눌러야
-    # 한다. 관리자는 아침에 한눈에 봐야 하고, 처음 보는 사람에게도
-    # 시스템이 무엇을 하는지 스크롤 한 번에 드러나야 한다.
+    # ---------- 오늘 판정 ----------
+    # 블록과 알람은 여기서 한 번만 만들고 모든 화면이 돌려쓴다.
+    # 화면마다 다시 계산하면 같은 시각에 다른 숫자가 나올 수 있다.
     _blk_now = build_blocks(today_df, today, conservative) \
         if not today_df.empty else pd.DataFrame()
     _al_now = build_alarms(_blk_now, lead) if not _blk_now.empty \
@@ -1168,8 +1154,8 @@ def main() -> None:
     _tmr_tier = classify(_tmr_max) if _tmr_max is not None else None
 
     # ---------- 관리자 화면 ----------
-    # 시안 세 안을 그대로 전환해 쓴다. 판정값은 한곳(_ctx)에서 나오므로
-    # 어느 화면을 보든 같은 숫자가 표시된다.
+    # 판정값은 전부 _ctx 한곳에서 나온다. 어느 화면을 보든, 화면을
+    # 몇 번을 오가든 같은 숫자가 표시된다.
     _ctx = {
         "now": now, "site": name, "grid": f"{nx}/{ny}",
         "source_text": (f"{cur_dt:%H:%M} {cur_src}" if cur_dt else cur_src),
@@ -1189,13 +1175,11 @@ def main() -> None:
         "tier_by_code": tier_by_code, "rest_slots": rest_slots,
     }
 
-    # 한 번에 한 화면만 띄운다.
-    #   앞의 셋은 판정 화면, 뒤의 셋은 기록·관리 화면이다.
-    #   예전처럼 아래에 늘 붙여 두면 어느 화면을 골라도 같은 것이 따라와
+    # 한 번에 한 화면만 띄운다. 한 화면은 한 가지 일만 한다.
+    #   관제는 오늘 판정 전부(블록 훑기 · 시간축 · 판정 근거)를 한 장에 담고,
+    #   나머지 다섯은 각각 다른 일이다.
+    #   아래에 늘 붙여 두면 어느 화면을 골라도 같은 것이 따라와
     #   화면을 고른 의미가 없어진다.
-    # 한 화면이 한 가지 일만 하도록 나눈다.
-    #   앞의 셋은 같은 판정을 다른 각도로 본다(훑기 / 시간축 / 근거).
-    #   뒤의 다섯은 서로 다른 일이다.
     _VIEWS = ("관제", "신고", "근로자 명단",
               "조치 기록", "문자 알림", "법적 근거")
     # 미확인 신고 건수는 탭에 숫자로 붙는다. 0건이면 붙지 않는다.

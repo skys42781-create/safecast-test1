@@ -39,9 +39,6 @@ TIER = {
 }
 
 ACCENT = "#5980A6"
-INK = "#1D1F20"
-GROUND = "#F2F2F3"
-
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');

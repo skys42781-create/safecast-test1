@@ -35,9 +35,6 @@ PANEL_TXT = "#BDD8F2"     # 보조 텍스트
 PANEL_HI = "#D6EBFF"      # 조치 문구
 
 BASE_H = 300
-STAT_ROWS = 1
-
-
 def tier_color(tier_short: str) -> str:
     for k, v in TIER_COLORS.items():
         if k in tier_short:

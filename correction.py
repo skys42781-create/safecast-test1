@@ -43,13 +43,8 @@ SITE_BIAS_CSV = Path(__file__).resolve().parent / "data" / "site_bias.csv"
 LAPSE_MAX = {1: 0.0068, 2: 0.0074, 3: 0.0080, 4: 0.0083, 5: 0.0083, 6: 0.0080,
              7: 0.0074, 8: 0.0067, 9: 0.0061, 10: 0.0058, 11: 0.0058, 12: 0.0062}
 
-LAPSE_SRC = "김용석 외(2014) 「기온감률 효과 적용에 따른 공간내삽기법의 기온 추정 정확도 비교」 Table 1"
-
 # 보정량 상한. 이보다 큰 값이 나오면 고도 입력이 잘못됐을 가능성이 높다.
 MAX_CORRECTION = 6.0
-
-OPEN_ELEVATION = "https://api.open-elevation.com/api/v1/lookup"
-
 
 # =====================================================================
 # 습도 재계산 — 이 모듈의 핵심
@@ -177,13 +172,6 @@ def _from_api(lat: float, lon: float) -> tuple[float | None, str]:
     return None, " / ".join(errs)
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def get_elevation(lat: float, lon: float) -> float | None:
-    """좌표 → 해발고도(m). 하위 호환용 래퍼."""
-    v, _ = resolve_elevation(lat, lon)
-    return v
-
-
 def resolve_elevation(lat: float, lon: float) -> tuple[float | None, str]:
     """현장 고도를 4단계로 구한다.
 
@@ -294,55 +282,9 @@ def forecast_bias(nx: int, ny: int) -> dict:
             "reason": f"수집 {int(r['n']):,}건에서 학습한 격자 편의"}
 
 
-def render_forecast_bias(fb: dict) -> None:
-    if not fb.get("applied"):
-        st.caption(f"⚪ 예보 편의 보정 미적용 — {fb['reason']}")
-        return
-    st.caption(f"📊 예보 편의 보정 {fb['correction']:+.2f}℃ · {fb['reason']}")
-
-
 # =====================================================================
 # UI
 # =====================================================================
-
-def render_panel(res: dict, ta0: float, rh0: float, at0: float, at1: float,
-                 site_elev: float | None, ref_elev: float | None,
-                 ref_name: str, ref_dist: float | None, month: int) -> None:
-    """보정 근거 표시. 심사·감독 시 '이 숫자 어디서 왔나'에 화면이 답해야 한다."""
-    if not res["applied"]:
-        st.caption(f"⚪ 고도 보정 미적용 — {res['reason']}")
-        return
-
-    with st.expander(f"🏔️ 고도 보정 {res['delta_t']:+.2f}℃ · 체감온도 "
-                     f"{at0:.1f} → {at1:.1f}℃", expanded=False):
-        c1, c2 = st.columns(2)
-        c1.markdown(f"""
-**기준 지점**
-{ref_name}{f' · {ref_dist:.1f}km' if ref_dist is not None else ''}
-해발 {ref_elev:.0f}m
-
-**현장**
-해발 {site_elev:.0f}m ({res['dz']:+.0f}m)
-""")
-        c2.markdown(f"""
-**보정 결과**
-기온 {ta0:.1f} → {res['ta']:.1f}℃ ({res['delta_t']:+.2f})
-습도 {rh0:.0f} → {res['rh']:.0f}% ({res['delta_rh']:+.1f})
-체감 {at0:.1f} → {at1:.1f}℃
-""")
-        st.caption(f"산출: {res['reason']}")
-        st.caption(f"기온감률 {month}월 {res['rate']:.4f}℃/m · 출처: {LAPSE_SRC}")
-        st.caption("습도는 이슬점을 보존한 채 재계산했습니다. 기온만 보정하고 "
-                   "상대습도를 그대로 두면 체감온도를 약 1℃ 과소평가합니다.")
-
-        if ref_dist is not None and ref_dist > 20:
-            st.warning(f"⚠️ 기준 지점이 {ref_dist:.0f}km 떨어져 있습니다. "
-                       "고도 외 요인(해안 영향·도시열섬·국지 바람)이 커질 수 있습니다.")
-
-    st.caption("ℹ️ 이 보정은 **고도차로 인한 규칙적 오차**만 제거합니다. "
-               "관측소(잔디·백엽상)와 건설현장(콘크리트·철골)의 미기후 격차는 "
-               "관측 데이터에 정보가 없어 보정이 불가능하며, 실측 센서로만 해결됩니다.")
-
 
 def render_basis() -> None:
     """근거 탭에 넣을 설명."""

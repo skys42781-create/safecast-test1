@@ -32,8 +32,8 @@ from datetime import datetime
 import streamlit as st
 
 from admin_1a import (
-    ACCENT, FAINT, HERO_BG, LINE, LINE_IN, MUTED, NONWORK, TEXT, TIER_COLOR,
-    WEAK, _badge, _corners, _e, _w, inject_css,
+    ACCENT, FAINT, LINE_IN, MUTED, NONWORK, TEXT, TIER_COLOR, WEAK,
+    _corners, _e, _w, inject_css,
 )
 
 # =====================================================================

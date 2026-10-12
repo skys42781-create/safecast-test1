@@ -26,7 +26,7 @@ GitHub Actions가 30분마다 쌓아 둔 data/*.csv 를 예보·실황의 공급
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd

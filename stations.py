@@ -35,10 +35,6 @@ import streamlit as st
 
 TYP01 = "https://apihub.kma.go.kr/api/typ01/url"
 
-# 관측소가 이보다 멀면 고도 외 요인(해안·열섬·국지풍)이 커진다.
-FAR_KM = 20.0
-
-
 # =====================================================================
 # 공통
 # =====================================================================
@@ -184,28 +180,11 @@ def _has_hangul(s: str) -> bool:
     return any("\uac00" <= ch <= "\ud7a3" for ch in str(s))
 
 
-def _is_num(s: str) -> bool:
-    try:
-        float(s); return True
-    except ValueError:
-        return False
-
-
 # 고도차 1m를 수평거리 몇 km와 동등하게 볼 것인가.
 #   기온감률은 전국·월평균값이므로 실제와 ±20% 정도 어긋날 수 있다.
 #   500m를 보정하면 잔차가 약 0.67℃ 생기는데, 이는 수평으로 25km 떨어진
 #   지점의 기온차와 비슷한 수준이다. → 100m ≈ 5km, 즉 1m ≈ 0.05km.
 ELEV_PENALTY_KM_PER_M = 0.05
-
-
-def nearest(stations: pd.DataFrame, lat: float, lon: float,
-            n: int = 1) -> pd.DataFrame:
-    """순수 거리 기준 최근접."""
-    if stations.empty:
-        return pd.DataFrame()
-    s = stations.copy()
-    s["dist_km"] = [haversine(lat, lon, r.lat, r.lon) for r in s.itertuples()]
-    return s.nsmallest(n, "dist_km")
 
 
 def best_reference(stations: pd.DataFrame, lat: float, lon: float,
@@ -440,48 +419,6 @@ def pick_reference(key: str, lat: float, lon: float, tm: str,
 # =====================================================================
 # UI
 # =====================================================================
-
-def render_source(ref: dict) -> None:
-    """기준 지점 표시. 거리가 멀면 신뢰도 경고."""
-    if ref.get("elev_only"):
-        t = ref["ta_src"]
-        st.caption(f"🏔️ 고도 기준만 적용 — **{t['name']}**(ASOS) · "
-                   f"{t['dist']:.1f}km · 기준고도 {t['elev']:.0f}m")
-        st.caption("실황은 기상청 격자값이며, 고도 보정만 관측소 기준으로 합니다.")
-        return
-
-    if not ref.get("ok"):
-        note = ref.get("note") or "원인 미상 (관측소 응답 없음)"
-        st.caption(f"⚪ 관측소 기준 미적용 — {note}")
-        st.caption("→ 기준 고도를 알 수 없어 고도 보정을 건너뜁니다. "
-                   "표시값은 기상청 격자 원본입니다.")
-        return
-
-    t = ref["ta_src"]
-    line = (f"🌡️ 기온 **{t['name']}**({t['kind']}) · {t['dist']:.1f}km · "
-            f"기준고도 {t['elev']:.0f}m")
-    if ref.get("rh_src") and ref["rh_src"]["stn"] != t["stn"]:
-        h = ref["rh_src"]
-        line += f"  ／  💧 습도 **{h['name']}**(ASOS) · {h['dist']:.1f}km"
-    st.caption(line)
-
-    if ref.get("candidates"):
-        with st.expander("기준 지점 선정 근거"):
-            st.caption("거리와 고도차를 함께 고려합니다. 보정량이 클수록 "
-                       "기온감률의 불확실성이 증폭되므로, 가깝기만 한 지점보다 "
-                       "고도가 비슷한 지점이 유리할 수 있습니다.")
-            _c = pd.DataFrame(ref["candidates"])
-            _c["dist_km"] = _c["dist_km"].round(1)
-            _c["ref_elev"] = _c["ref_elev"].round(0).astype(int)
-            st.dataframe(_c.rename(columns={
-                "name": "지점", "dist_km": "거리(km)", "ref_elev": "기준고도(m)"}),
-                hide_index=True, use_container_width=True)
-
-    if t["dist"] > FAR_KM:
-        st.warning(f"⚠️ 기준 관측소가 {t['dist']:.0f}km 떨어져 있습니다. "
-                   "고도 외 요인(해안 영향·도시열섬·국지 바람)이 커질 수 있어 "
-                   "보정 신뢰도가 낮아집니다.", icon="⚠️")
-
 
 def render_basis() -> None:
     st.markdown("""

@@ -33,10 +33,8 @@ import streamlit as st
 
 from admin_1a import (
     ACCENT, FAINT, LINE, LINE_IN, MUTED, NONWORK, TEXT, TIER_COLOR, WEAK,
-    _badge, _corners, _e, _w, inject_css,
+    _e, _w, inject_css,
 )
-
-SHEET_CANVAS = 1180
 
 # 표 행 높이. HTML 행과 체크 열이 같은 값을 쓰므로 여기만 바꾸면 함께 움직인다.
 ROW_H = 34
