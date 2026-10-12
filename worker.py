@@ -59,6 +59,15 @@ REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
 TEXT_COLS = ["이름", "생년월일", "소속", "작업구역", "공종",
              "투입일차", "복귀자", "처리상태", "연락처"]
 
+# 반대로, 숫자로 되돌려야 하는 열.
+#
+# [왜 필요한가]
+#   위의 식별 열을 지키려고 CSV 전체를 dtype=str 로 읽는다. 그러면
+#   본래 숫자인 열까지 문자열이 되어, "3" >= 3 같은 비교에서 TypeError가
+#   난다. 읽은 직후 이 열들만 숫자로 되돌린다.
+#   빈 칸이나 깨진 값은 0으로 둔다 — 화면이 멈추는 것보다 낫다.
+NUM_COLS = ["증상개수", "연령"]
+
 STATUS = ["미확인", "확인함", "조치완료"]
 
 # 충돌(다른 제출이 먼저 커밋됨) 시 재시도 횟수
@@ -146,6 +155,11 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
                           if v and v.isdigit() and len(v) in (9, 10)
                           and not v.startswith("0") else v)
         df[c] = col
+
+    for c in NUM_COLS:
+        if c in df.columns:
+            df[c] = (pd.to_numeric(df[c], errors="coerce")
+                     .fillna(0).astype(int))
     return df
 
 
@@ -474,8 +488,13 @@ GH_BRANCH = "main"''', language="toml")
         m[0].metric("신고 건수", f"{len(view)}건")
         m[1].metric("미확인", f"{pending}건",
                     delta="즉시 확인" if pending else None, delta_color="off")
+        # 숫자 비교 전에 한 번 더 숫자로 바꾼다.
+        # _normalize 가 이미 처리하지만, 예전 형식의 파일이나 손으로 고친
+        # 행이 섞여 들어와도 이 지표 하나 때문에 화면 전체가 멈추지 않도록.
+        _sym = pd.to_numeric(view.get("증상개수"), errors="coerce") \
+            if not view.empty else None
         m[2].metric("증상 3개 이상",
-                    f"{int((view['증상개수'] >= 3).sum()) if not view.empty else 0}건")
+                    f"{int((_sym >= 3).sum()) if _sym is not None else 0}건")
 
         if pending:
             st.error(f"🚨 미확인 신고 {pending}건 — 즉시 현장 확인이 필요합니다.",
