@@ -79,7 +79,18 @@ section[data-testid="stSidebar"], section[data-testid="stSidebar"] * {
   color: var(--sc-ink);
 }
 section[data-testid="stSidebar"] [style*="color:"] { color: revert; }
-.block-container { padding-top: 1.8rem; padding-bottom: 3rem; max-width: 1240px; }
+/* ---------- 상단 여백 ----------
+   Streamlit 헤더(Share·메뉴가 있는 줄)는 position:fixed 라 본문 위를 덮는다.
+   높이가 약 3.75rem 인데 padding-top 을 1.8rem 으로 줄여 놔서, 페이지 맨 위
+   1~2rem 이 헤더 아래로 들어가 로고 윗부분이 잘려 보였다.
+   헤더보다 조금 더 띄워 본문이 항상 그 아래에서 시작하게 한다.
+   (기본값은 6rem. 더 붙이고 싶으면 아래 숫자만 줄이면 되는데,
+    4rem 아래로 내리면 다시 겹치기 시작한다.)
+
+   헤더 배경은 투명하게 둔다. 불투명하면 스크롤할 때 본문이 그 밑으로
+   지나가며 가려진 띠가 생긴다. */
+header[data-testid="stHeader"] { background: transparent; }
+.block-container { padding-top: 4.5rem; padding-bottom: 3rem; max-width: 1240px; }
 
 /* ---------- 도면 카드 ---------- */
 .bp {
