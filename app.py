@@ -486,6 +486,44 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def fill_today_morning(fc: pd.DataFrame, nx: int, ny: int, key: str,
+                       today: date, from_h: int = 8) -> pd.DataFrame:
+    """오늘 이른 시간대를 그날 첫 발표본으로 메운다 (그래프 표시용).
+
+    [왜 필요한가]
+      단기예보는 발표 시각 이후만 내려준다. 오후 4시에 앱을 열면
+      14시 발표본이 걸려 15시부터만 들어오고, 하루 흐름을 보는
+      그래프가 오전부터 통째로 빈다. 정작 더웠던 시간이 안 보인다.
+
+      당일 02시 발표본은 03시부터 사흘치를 담고 있으므로, 최신
+      발표본이 덮지 못한 이른 시간만 거기서 가져와 앞에 붙인다.
+      겹치는 구간은 건드리지 않는다 — 가까운 시각일수록 최신
+      발표본이 정확하기 때문이다.
+
+    [판정에는 쓰지 않는다]
+      블록 등급과 알람은 이 값으로 다시 만들지 않는다. 지나간
+      시각의 알람이 '미발송'으로 되살아나면 지금 보내야 할 것과
+      섞여 읽힌다. 이 함수의 결과는 그래프에만 들어간다.
+    """
+    t = fc[fc["day"] == today]
+    if t.empty:
+        return fc
+    first = int(t["hour"].min())
+    if first <= from_h:
+        return fc
+    try:
+        early = enrich(fetch_forecast(nx, ny, key,
+                                      today.strftime("%Y%m%d"), "0200"))
+    except Exception:
+        return fc                      # 못 가져오면 지금처럼 보인다
+    gap = early[(early["day"] == today) & (early["hour"] < first)]
+    if gap.empty:
+        return fc
+    return (pd.concat([gap, fc], ignore_index=True)
+            .drop_duplicates(subset=["datetime"], keep="last")
+            .sort_values("datetime").reset_index(drop=True))
+
+
 # =====================================================================
 # SECTION 4. 알고리즘 1 — 블록화 + 보수적 MAX
 # =====================================================================
@@ -1054,6 +1092,12 @@ def main() -> None:
     day_max = float(today_df["at"].max()) if not today_df.empty else float(fc["at"].max())
     day_tier = classify(day_max)
 
+    # 그래프에만 쓰는 '오늘 하루 전체'. 판정·알람은 today_df 그대로 둔다.
+    today_full = today_df
+    if kma and not (demo or fc_is_demo):
+        _f = fill_today_morning(fc, nx, ny, kma, today)
+        today_full = _f[_f["day"] == today]
+
     # ---------- 근로자 모드 ----------
     # 지침은 자각증상 점검표를 '근로자 스스로' 체크하도록 정한다.
     # 근로자에게는 남의 건강정보를 일절 보여주지 않는다.
@@ -1171,7 +1215,8 @@ def main() -> None:
         "cur_tier": ct,
         "corr_note": (f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
                       if corr.get("applied") else "기상청 원본값"),
-        "today_df": today_df, "blocks": _blk_now, "alarms": _al_now,
+        "today_df": today_df, "today_full": today_full,
+        "blocks": _blk_now, "alarms": _al_now,
         "tmr_df": tmr_df, "blocks_tmr": _blk_tmr,
         "tmr_max": _tmr_max, "tmr_tier": _tmr_tier,
         "tbm_public": (T.public_view(day_tbm) if not day_tbm.empty

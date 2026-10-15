@@ -208,7 +208,12 @@ def build_1b(ctx: dict, *, day: str = "today") -> dict:
     내일 몇 시에 보낼지는 오늘 밤 다시 계산되므로 지금 찍어 두면 틀린다.
     """
     tmr = (day == "tomorrow")
-    df = ctx["tmr_df"] if tmr else ctx["today_df"]
+    # 그래프는 오늘 하루 전체를 그린다. 최신 발표본이 오후부터만 담고
+    # 있어도 아침까지 이어 보여야 하루 흐름이 읽힌다.
+    # 등급 판정은 today_df 로 따로 하므로 여기 값이 등급을 바꾸지 않는다.
+    df = ctx["tmr_df"] if tmr else ctx.get("today_full")
+    if df is None or df.empty:
+        df = ctx["today_df"]
     ct = ctx["cur_tier"]
     _nxt = None if tmr else next_alarm(ctx)
 
