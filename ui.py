@@ -288,16 +288,17 @@ _GLYPH = "❶❷❸❹❺❻❼❽❾❿"
 _BADGE_BG = "#B91C1C"   # 심각 등급과 같은 빨강 — 앱 안에서 빨강의 뜻을 하나로 유지
 
 
-def _nav_css(key: str, counts: list[int]) -> None:
+def _nav_css(key: str, counts: list[int], compact: bool = False) -> None:
     """탭 CSS. 배지 숫자를 content 로 찍기 때문에 건수를 받아야 한다."""
     base = f'[class*="st-key-{key}_"]'
+    pad, size = ("5px 2px", "12.5px") if compact else ("9px 4px", "13.5px")
     css = f"""
 <style>
 /* 탭 — 테두리와 배경을 지우고 밑줄만 남긴다 */
 {base} button {{
   border: none !important; background: transparent !important;
   border-radius: 0 !important; box-shadow: none !important;
-  padding: 9px 4px !important; font-size: 13.5px !important;
+  padding: {pad} !important; font-size: {size} !important;
   color: rgba(29,31,32,.5) !important; font-weight: 500 !important;
   border-bottom: 2px solid transparent !important;
   transition: color .15s, border-color .15s;
@@ -337,7 +338,7 @@ div[data-testid="stHorizontalBlock"]:has({base}) {{ gap: 0 !important; }}
 
 
 def nav(views: list[str] | tuple[str, ...], *, key: str = "_nav",
-        alert: dict[str, int] | None = None) -> str:
+        alert: dict[str, int] | None = None, compact: bool = False) -> str:
     """밑줄 탭 형태의 화면 선택기.
 
     [왜 라디오가 아닌가]
@@ -352,6 +353,11 @@ def nav(views: list[str] | tuple[str, ...], *, key: str = "_nav",
 
     alert: {화면명: 건수}. 0보다 크면 그 탭에 빨간 동그라미 배지가 붙는다.
            놓치면 안 되는 화면(미확인 신고)을 탭 줄에서 바로 알리기 위한 것이다.
+
+    compact: 탭을 왼쪽에 작게 모은다. 화면 전환이 아니라 한 그림 안에서
+           보기를 바꿀 때 쓴다(오늘/내일 차트). 화면 상단의 주 탭과
+           같은 크기로 그리면 둘 중 어느 것이 상위인지 알 수 없게 된다.
+           밑줄도 탭 아래만 긋고 가로로 끝까지 긋지 않는다.
 
     [버전이 낮으면]
       1.39 미만에서는 st-key-* 가 없어 CSS가 닿지 않는다. 그때는
@@ -368,9 +374,13 @@ def nav(views: list[str] | tuple[str, ...], *, key: str = "_nav",
 
     nums = [int(alert.get(v, 0) or 0) for v in views]
     if _KEY_CLASS:
-        _nav_css(key, [n for n in nums if n > 0])
+        _nav_css(key, [n for n in nums if n > 0], compact)
 
-    cols = st.columns(len(views), gap="small")
+    # compact 는 탭 뒤에 빈 칸을 크게 둬서 버튼을 왼쪽에 몰아 붙인다.
+    # Streamlit 컬럼은 비율로만 나뉘므로, 남는 폭을 빈 컬럼이 먹게 한다.
+    n_v = len(views)
+    cols = st.columns([1] * n_v + [max(2, 9 - n_v)], gap="small") \
+        if compact else st.columns(n_v, gap="small")
     for i, (col, v) in enumerate(zip(cols, views)):
         on = (v == cur)
         n = nums[i]
@@ -391,7 +401,8 @@ def nav(views: list[str] | tuple[str, ...], *, key: str = "_nav",
             st.session_state[key] = v
             st.rerun()
 
-    st.markdown(
-        '<div style="border-bottom:1px solid var(--sc-line);'
-        'margin:-10px 0 18px"></div>', unsafe_allow_html=True)
+    if not compact:
+        st.markdown(
+            '<div style="border-bottom:1px solid var(--sc-line);'
+            'margin:-10px 0 18px"></div>', unsafe_allow_html=True)
     return cur

@@ -19,7 +19,7 @@ ctx 에 담겨 오는 것 (app.py 에서 조립):
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 from recipients import sent_at_map, sent_today
@@ -200,20 +200,30 @@ def build_1a(ctx: dict) -> dict:
 # 1b — 시각 축 타임라인
 # =====================================================================
 
-def build_1b(ctx: dict) -> dict:
-    df, ct = ctx["today_df"], ctx["cur_tier"]
-    al = ctx["alarms"]
-    _nxt = next_alarm(ctx)
+def build_1b(ctx: dict, *, day: str = "today") -> dict:
+    """시각 축 차트용 데이터.
+
+    day="tomorrow" 면 내일 예보로 같은 그림을 만든다.
+    내일은 '지금'이 없으므로 now_text 를 비우고, 알람 표시도 넣지 않는다.
+    내일 몇 시에 보낼지는 오늘 밤 다시 계산되므로 지금 찍어 두면 틀린다.
+    """
+    tmr = (day == "tomorrow")
+    df = ctx["tmr_df"] if tmr else ctx["today_df"]
+    ct = ctx["cur_tier"]
+    _nxt = None if tmr else next_alarm(ctx)
 
     # 차트 x축은 08~18시 고정. 그 밖의 시각은 선이 밖으로 나가므로 자른다.
     hourly = [{"hour": int(h), "apparent": float(a)}
               for h, a in zip(df["hour"], df["at"]) if 8 <= int(h) <= 18]
     if not hourly:
+        if tmr:
+            return {}          # 내일 예보가 없으면 차트를 그리지 않는다
         hourly = [{"hour": max(8, min(18, ctx["now"].hour)),
                    "apparent": float(ctx["cur_at"])}]
 
+    src_blocks = ctx["blocks_tmr"] if tmr else ctx["blocks"]
     blocks, rests = [], []
-    for _, r in ctx["blocks"].iterrows():
+    for _, r in src_blocks.iterrows():
         t = ctx["tier_by_code"](r["tier_code"])
         nm = str(r["block_name"]).split("(")[0].strip()
         label = nm if not r["is_work"] else f"{nm} · {t.short} {r['at_rep']:.1f}"
@@ -225,10 +235,11 @@ def build_1b(ctx: dict) -> dict:
             rests.append({"start": str(x["휴식 시작"]), "minutes": 20,
                           "tier": t.short})
 
+    when = ctx["now"] + timedelta(days=1) if tmr else ctx["now"]
     return {
         "site": ctx["site"],
-        "date_text": f"{ctx['now']:%Y-%m-%d} ({WEEK[ctx['now'].weekday()]})",
-        "now_text": f"{ctx['now']:%H:%M}",
+        "date_text": f"{when:%Y-%m-%d} ({WEEK[when.weekday()]})",
+        "now_text": "" if tmr else f"{ctx['now']:%H:%M}",
         "tier": ct.short,
         "tier_chip": f"지금 {ct.short} {ctx['cur_at']:.1f}℃",
         "alarm_chip": (f"다음 알람 {_nxt['발송시각']}"

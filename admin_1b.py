@@ -27,12 +27,13 @@ SAFECASTY — 관리자 대시보드 1b (시각 축 타임라인)
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 import streamlit as st
 
 from admin_1a import (
-    ACCENT, FAINT, LINE_IN, MUTED, NONWORK, TEXT, TIER_COLOR, WEAK,
+    ACCENT, FAINT, LINE_IN, NONWORK, TEXT, TIER_COLOR, WEAK,
     _corners, _e, _w, inject_css,
 )
 
@@ -41,7 +42,7 @@ from admin_1a import (
 # =====================================================================
 
 X0, X_PER_HOUR = 60.0, 108.0      # 08시 기준
-Y0, Y_PER_DEG = 40.0, 26.0        # 38℃ 기준
+Y0, PLOT_H = 40.0, 260.0          # 38℃ 자리와 그래프 세로 길이
 HOUR_MIN, HOUR_MAX = 8, 18
 TEMP_TOP, TEMP_BOTTOM = 38.0, 28.0
 
@@ -59,8 +60,31 @@ def x_at(hour: float) -> float:
     return X0 + (hour - HOUR_MIN) * X_PER_HOUR
 
 
-def y_at(temp: float) -> float:
-    return Y0 + (TEMP_TOP - temp) * Y_PER_DEG
+def y_at(temp: float, bottom: float = TEMP_BOTTOM) -> float:
+    """체감온도 → y좌표. 위는 항상 38℃, 아래만 움직인다.
+
+    [왜 아래만 움직이는가]
+      등급 경계(31·33·35·38)는 법이 정한 값이라 늘 보여야 한다. 위를
+      고정하면 어느 날 차트를 봐도 경계선이 같은 자리에 있어 두 날을
+      겹쳐 읽을 수 있다.
+
+      반대로 아래를 28℃에 못 박아 두면 선선한 날 예보가 바닥 밖으로
+      나가 선이 통째로 사라진다. 10월에 16℃가 찍히면 y좌표가 600을
+      넘어 viewBox(높이 400) 밖이다. 여름에는 28℃ 밑이 거의 없어
+      드러나지 않지만, 봄·가을에는 매일 빈 그래프가 된다.
+
+      그래서 바닥만 데이터에 맞춰 내린다. 더운 날(최저 28℃ 이상)은
+      bottom 이 28 그대로라 눈금 간격이 26px — 지금과 완전히 같다.
+    """
+    return Y0 + (TEMP_TOP - temp) * (PLOT_H / (TEMP_TOP - bottom))
+
+
+def chart_bottom(hourly: list[dict]) -> float:
+    """차트 바닥 온도. 더우면 28℃, 선선하면 최저값보다 한 칸 아래."""
+    if not hourly:
+        return TEMP_BOTTOM
+    lo = min(float(h["apparent"]) for h in hourly)
+    return min(TEMP_BOTTOM, float(math.floor(lo)) - 1.0)
 
 
 def _hm(text: str) -> float:
@@ -79,22 +103,24 @@ BANDS = [
     (35.0, 38.0, "심각"),
     (33.0, 35.0, "경계"),
     (31.0, 33.0, "주의"),
-    (TEMP_BOTTOM, 31.0, "평시"),
 ]
-TICKS = [38, 35, 33, 31, 28]
+TICKS = [38, 35, 33, 31]
 
 
-def _bands() -> str:
+def _bands(bottom: float = TEMP_BOTTOM) -> str:
     """등급 밴드 + 경계선 + 우측 라벨.
 
     33℃만 실선이다 — 2시간마다 20분 휴식이 시작되는 법적 의무 경계이므로
     다른 경계와 시각적으로 구분한다.
+
+    평시 밴드와 맨 아래 눈금은 bottom 을 따라간다. 선선한 날에는
+    평시 구간이 넓어지는데, 그게 사실이다 — 경계까지 여유가 그만큼 있다.
     """
     out = []
-    top_y = y_at(TEMP_TOP) - 24
-    for lo, hi, tier in BANDS:
-        y_lo = y_at(lo)
-        y_hi = top_y if hi is None else y_at(hi)
+    top_y = y_at(TEMP_TOP, bottom) - 24
+    for lo, hi, tier in list(BANDS) + [(bottom, 31.0, "평시")]:
+        y_lo = y_at(lo, bottom)
+        y_hi = top_y if hi is None else y_at(hi, bottom)
         out.append(
             f'<rect x="{X0}" y="{y_hi:.1f}" width="{x_at(HOUR_MAX) - X0}" '
             f'height="{y_lo - y_hi:.1f}" fill="{TIER_COLOR[tier]}" opacity="0.11"/>')
@@ -104,8 +130,8 @@ def _bands() -> str:
                 f'<text x="{x_at(HOUR_MAX) + 10}" y="{(y_lo + y_hi) / 2 + 4:.1f}" '
                 f'font-size="12" font-weight="600" fill="{TIER_COLOR[tier]}">{tier}</text>')
 
-    for t in TICKS:
-        y = y_at(t)
+    for t in list(TICKS) + [int(bottom)]:
+        y = y_at(t, bottom)
         solid = (t == 33)
         dash = "" if solid else ' stroke-dasharray="4 4"'
         color = TIER_COLOR["경계"] if solid else "rgba(29,31,32,.45)"
@@ -128,23 +154,26 @@ def _tier_of(temp: float) -> str:
     return "평시"
 
 
-def _curve(hourly: list[dict]) -> str:
-    pts = [(x_at(h["hour"]), y_at(h["apparent"])) for h in hourly]
+def _curve(hourly: list[dict], bottom: float = TEMP_BOTTOM) -> str:
+    pts = [(x_at(h["hour"]), y_at(h["apparent"], bottom)) for h in hourly]
     line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
-    base = y_at(TEMP_BOTTOM)
+    base = y_at(bottom, bottom)
     area = f"{line} {pts[-1][0]:.1f},{base} {pts[0][0]:.1f},{base}"
 
     out = [f'<polygon points="{area}" fill="{AREA_COLOR}" opacity="0.22"/>',
            f'<polyline points="{line}" fill="none" stroke="{LINE_COLOR}" stroke-width="3"/>']
 
     peak = max(hourly, key=lambda h: h["apparent"])
+    # 최고점 색은 그 온도의 등급을 따른다.
+    # 28℃인 날에도 빨간 점이 찍히면 더운 날로 잘못 읽힌다.
+    peak_color = TIER_COLOR[_tier_of(peak["apparent"])]
     for h in hourly:
-        x, y = x_at(h["hour"]), y_at(h["apparent"])
+        x, y = x_at(h["hour"]), y_at(h["apparent"], bottom)
         if h is peak:
-            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{TIER_COLOR["심각"]}"/>')
+            out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{peak_color}"/>')
             out.append(f'<text x="{x:.1f}" y="{y - 14:.1f}" text-anchor="middle" '
-                       f'font-size="15" font-weight="700" fill="{TIER_COLOR["심각"]}">'
-                       f'{h["apparent"]} 최고</text>')
+                       f'font-size="15" font-weight="700" fill="{peak_color}">'
+                       f'{h["apparent"]:.1f} 최고</text>')
         else:
             out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.4" fill="{LINE_COLOR}"/>')
     return "".join(out)
@@ -192,8 +221,10 @@ def _rest_band(rests: list[dict], alarms: list[dict]) -> str:
         color = TIER_COLOR.get(r.get("tier", "경계"), ACCENT)
         out.append(f'<rect x="{x1:.1f}" y="{REST_Y}" width="{w:.1f}" height="{REST_H}" '
                    f'fill="{color}"/>')
-        out.append(f'<text x="{x1 + w / 2:.1f}" y="{REST_Y + REST_H + 13}" text-anchor="middle" '
-                   f'font-size="11" fill="{MUTED}">{_e(r["start"])}</text>')
+        # 시각은 띠 안에 흰 글씨로 넣는다.
+        # 띠 아래에 두면 바로 밑 시각축 숫자와 겹쳐 둘 다 못 읽는다.
+        out.append(f'<text x="{x1 + w / 2:.1f}" y="{REST_Y + REST_H - 4}" text-anchor="middle" '
+                   f'font-size="10" font-weight="600" fill="#ffffff">{_e(r["start"])}</text>')
     for a in alarms:
         x = x_at(_hm(a["time"]))
         out.append(f'<polygon points="{x:.1f},{ALARM_Y} {x + 8:.1f},{ALARM_Y + 12} '
@@ -215,14 +246,22 @@ def _axis() -> str:
 
 
 def build_svg(d: dict) -> str:
+    # now_text 가 비면 '지금' 선을 그리지 않는다.
+    #   내일 차트에는 현재 시각이 없다. 빈 값으로 넘어오면 표시를 거른다.
+    #   억지로 그리면 내일 08시에 '지금'이 찍혀 오늘로 오해하게 된다.
+    now = _now_marker(d["now_text"]) if d.get("now_text") else ""
+    # 바닥을 밖에서 정해 줄 수 있다. 오늘·내일 두 장을 같은 자로 재야
+    # 선의 높이 차이가 곧 더위의 차이가 된다.
+    bottom = d.get("bottom") if d.get("bottom") is not None \
+        else chart_bottom(d["hourly"])
     return (
         '<svg viewBox="0 0 1200 400" style="width:100%;height:auto;display:block;'
         "font-family:'Barlow Condensed','IBM Plex Sans KR',sans-serif\">"
-        + _bands()
-        + _curve(d["hourly"])
+        + _bands(bottom)
+        + _curve(d["hourly"], bottom)
         + _block_band(d["blocks"])
         + _rest_band(d["rests"], d["alarms"])
-        + _now_marker(d["now_text"])
+        + now
         + _axis()
         + "</svg>")
 
@@ -231,7 +270,7 @@ def build_svg(d: dict) -> str:
 # 화면
 # =====================================================================
 
-def _chart(d: dict, show_basis: bool) -> str:
+def _chart(d: dict, show_basis: bool, title: str, note: str) -> str:
     basis = ""
     if show_basis:
         rows = "".join(
@@ -242,23 +281,28 @@ def _chart(d: dict, show_basis: bool) -> str:
 <div class="sc sc-bp" style="padding:16px 14px 10px;margin-top:18px">
   {_corners()}
   <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
-    <span class="sc-cond" style="font-weight:600;font-size:17px">
-      오늘 체감온도 · 공정 블록 · 조치 시각</span>
-    <span style="font-size:11.5px;color:{WEAK}">1시간 예보 → 블록 내 최고값으로 등급 판정</span>
+    <span class="sc-cond" style="font-weight:600;font-size:17px">{_e(title)}</span>
+    <span style="font-size:11.5px;color:{WEAK}">{_e(note)}</span>
   </div>
   {build_svg(d)}
   {basis}
 </div>"""
 
 
-def render(d: dict, *, show_basis: bool = True) -> dict:
+def render(d: dict, *, show_basis: bool = True,
+           title: str = "오늘 체감온도 · 공정 블록 · 조치 시각",
+           note: str = "1시간 예보 → 블록 내 최고값으로 등급 판정") -> dict:
     """시각 축 차트.
 
     관제 화면 안에 끼워 넣는 조각이다. 상단 바와 지표는 그리지 않는다 —
     바로 위 히어로가 같은 내용을 이미 보여준다.
+
+    제목을 밖에서 넘길 수 있게 열어 둔 것은 같은 그림으로 내일 예보도
+    그리기 위해서다. 축과 등급 띠가 오늘과 똑같아야 두 장을 위아래로
+    놓고 눈으로 바로 비교할 수 있다.
     """
     inject_css()
-    _w(_chart(d, show_basis))
+    _w(_chart(d, show_basis, title, note))
     return {"show_basis": show_basis}
 
 

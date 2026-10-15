@@ -1153,6 +1153,13 @@ def main() -> None:
     _tmr_max = float(tmr_df["at"].max()) if not tmr_df.empty else None
     _tmr_tier = classify(_tmr_max) if _tmr_max is not None else None
 
+    # 내일 블록도 같은 함수로 뽑는다.
+    #   오늘 블록은 하루가 지나갈수록 줄어 저녁에는 빈 그림이 된다.
+    #   내일 것은 하루치가 통째로 있어서, 오후에 봐도 '다음 근무일이
+    #   어떤 하루인가'를 온전히 보여 준다. 준비는 전날에 해야 한다.
+    _blk_tmr = build_blocks(tmr_df, tomorrow, conservative) \
+        if not tmr_df.empty else pd.DataFrame()
+
     # ---------- 관리자 화면 ----------
     # 판정값은 전부 _ctx 한곳에서 나온다. 어느 화면을 보든, 화면을
     # 몇 번을 오가든 같은 숫자가 표시된다.
@@ -1165,6 +1172,8 @@ def main() -> None:
         "corr_note": (f"고도 보정 {corr['delta_t']:+.2f}℃ · 습도 재계산 적용"
                       if corr.get("applied") else "기상청 원본값"),
         "today_df": today_df, "blocks": _blk_now, "alarms": _al_now,
+        "tmr_df": tmr_df, "blocks_tmr": _blk_tmr,
+        "tmr_max": _tmr_max, "tmr_tier": _tmr_tier,
         "tbm_public": (T.public_view(day_tbm) if not day_tbm.empty
                        else pd.DataFrame()),
         "roster_n": len(roster),
@@ -1221,9 +1230,46 @@ def main() -> None:
             else:
                 st.error(f"발송 실패 — {res['why']}")
 
+        def _charts() -> None:
+            """오늘·내일 중 한 장만 그린다. 차트 바로 위에서 고른다.
+
+            [왜 쌓지 않고 바꾸는가]
+              두 장을 세로로 쌓으면 관제 화면이 그만큼 길어진다. 관제는
+              이미 판정·차트·원본 표를 한 화면에 담고 있어서, 여기서
+              또 늘리면 스크롤이 길어져 훑는 화면이 아니게 된다.
+
+              대신 세로 눈금을 두 날의 공통값으로 맞춰 둔다. 탭을 오가도
+              등급 경계선과 바닥이 같은 자리에 있으므로, 선의 높이가
+              달라진 만큼이 곧 내일의 차이다.
+            """
+            _d1 = AD.build_1b(_ctx)
+            _d2 = AD.build_1b(_ctx, day="tomorrow")
+
+            # 두 장의 세로 눈금을 하나로 맞춘다.
+            _floor = B.chart_bottom(_d1["hourly"] + (_d2["hourly"] if _d2 else []))
+            _d1["bottom"] = _floor
+
+            if not _d2:
+                st.caption("내일 예보가 아직 들어오지 않았습니다 — "
+                           "기상청 단기예보는 하루 8회 갱신됩니다.")
+                B.render(_d1)
+                return
+
+            _d2["bottom"] = _floor
+            _pick = UI.nav(("오늘", "내일"), key="_chart_day", compact=True)
+
+            if _pick == "오늘":
+                B.render(_d1)
+            else:
+                _t = _tmr_tier.short if _tmr_tier else "—"
+                B.render(_d2, show_basis=True,
+                         title=f"내일 체감온도 · 공정 블록  ({tomorrow:%m월 %d일})",
+                         note=(f"내일 최고 {_t} {_tmr_max:.1f}℃ · 예보 기준"
+                               if _tmr_max is not None else "내일 예보"))
+
         A.render(AD.build_1a(_ctx), legal_only=strict, show_basis=True,
                  show_send=_send_alarm,
-                 chart=lambda: B.render(AD.build_1b(_ctx)),
+                 chart=_charts,
                  sheet=lambda: Cc.render(AD.build_1c(_ctx)))
 
         # 전파할 문구는 판정 화면에 딸린 것이다. 기록 화면에서는 보이지 않는다.
