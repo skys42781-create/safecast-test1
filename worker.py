@@ -438,8 +438,10 @@ def render_report(me: dict, symptom_count: int) -> None:
     if st.button("📢 관리자에게 알리기", type="primary",
                  use_container_width=True):
         if submit_report(me, symptom_count):
+            # 축하 연출(st.balloons)은 쓰지 않는다.
+            # 온열질환 증상을 알린 순간에 풍선이 떠오르면 상황의
+            # 무게와 어긋난다. 전달됐다는 사실과 다음 행동만 남긴다.
             st.success("전달되었습니다. 시원한 곳에서 대기하세요.")
-            st.balloons()
         else:
             st.error(f"전달 실패 — 구두로 알리세요.\n\n`{last_error()}`")
 
