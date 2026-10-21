@@ -330,6 +330,58 @@ def update_status(idx: int, status: str) -> bool:
     return False
 
 
+def delete_worker(idx: int, name: str | None = None,
+                  birth: str | None = None) -> bool:
+    """등록 명부에서 한 사람을 지운다.
+
+    [왜 필요한가]
+      잘못 입력했거나 중복 등록된 행, 현장을 떠난 사람이 명부에 남으면
+      알람 수신 인원과 민감군 집계가 실제 인원과 어긋난다. 그리고
+      현장을 떠난 사람의 이름·생년월일·연락처를 계속 쥐고 있을 이유도
+      없다. 지울 수단이 있어야 명부가 현장과 맞는다.
+
+    [신고 기록은 함께 지우지 않는다]
+      증상 신고는 그날 무엇을 보고 어떤 조치를 했는지 설명하는 근거다.
+      명부에서 뺐다고 과거 기록까지 사라지면 조치의 이유를 댈 수
+      없게 된다. 신고 기록을 지워야 하면 신고 화면에서 따로 지운다.
+
+    [왜 번호가 아니라 이름·생년월일로 다시 확인하는가]
+      화면에 목록을 띄운 뒤 누르기까지 사이에 다른 사람이 등록하거나
+      지우면 행 번호가 밀릴 수 있다. 번호만 믿고 지우면 엉뚱한 사람이
+      빠진다. 지우기 직전에 다시 읽어, 그 번호의 행이 고른 사람과
+      같은지 확인하고 다르면 이름·생년월일로 찾아간다.
+    """
+    df, sha = _read(SURVEY_PATH, SURVEY_COLS)
+    if df.empty:
+        return False
+
+    target = None
+    if idx in df.index:
+        r = df.loc[idx]
+        if (name is None or
+                (str(r.get("이름", "")).strip() == str(name).strip()
+                 and str(r.get("생년월일", "")).strip() == str(birth).strip())):
+            target = idx
+    if target is None and name is not None:
+        hit = df[(df["이름"].astype(str).str.strip() == str(name).strip())
+                 & (df["생년월일"].astype(str).str.strip() == str(birth).strip())]
+        if len(hit) != 1:          # 못 찾거나 똑같은 행이 여럿이면 멈춘다
+            st.session_state["_gh_err"] = (
+                "대상을 특정하지 못했습니다 (명부가 바뀌었을 수 있습니다). "
+                "새로고침 후 다시 시도하세요.")
+            return False
+        target = hit.index[0]
+
+    if target is None:
+        return False
+    who = str(df.loc[target, "이름"]) if "이름" in df.columns else f"{target}번"
+    out = df.drop(index=target).reset_index(drop=True)
+    if _write(SURVEY_PATH, out, sha, f"roster: {who} 삭제"):
+        load_survey.clear()
+        return True
+    return False
+
+
 def last_error() -> str:
     return st.session_state.get("_gh_err", "")
 
@@ -562,3 +614,38 @@ GH_BRANCH = "main"''', language="toml")
                                mime="text/csv")
             st.caption("ℹ️ 건강 관련 항목은 저장하지 않습니다. 민감군 판정에 "
                        "필요한 질환 정보는 보건관리자가 별도로 관리합니다.")
+
+            # ---- 명부에서 제외 ----
+            # 되돌릴 수 없으므로 체크 한 번을 거치게 한다. 목록에서 바로
+            # 삭제 버튼이 눌리면 잘못 누른 것을 복구할 방법이 없다.
+            st.markdown("##### 명부에서 제외")
+            st.caption("현장을 떠났거나 잘못 등록된 사람을 지웁니다. "
+                       "지난 신고 기록은 조치 근거라 함께 지우지 않습니다.")
+
+            # 동명이인이 있을 수 있으므로 소속·구역까지 붙여 고른다.
+            # 생년월일은 연도만 보여 준다 — 구분에는 그걸로 충분하다.
+            def _label(i: int) -> str:
+                r = sv.loc[i]
+                b = str(r.get("생년월일", ""))[:4]
+                part = " · ".join(x for x in (str(r.get("소속", "")).strip(),
+                                              str(r.get("작업구역", "")).strip())
+                                  if x)
+                return f"{r.get('이름', '')} ({b}년생)" + (f" · {part}" if part else "")
+
+            d1, d2 = st.columns([3, 1])
+            pick = d1.selectbox("대상", list(sv.index), format_func=_label,
+                                key="_del_pick")
+            sure = d2.checkbox("확인", key="_del_sure",
+                               help="체크해야 삭제됩니다")
+            if st.button("명부에서 제외", disabled=not sure,
+                         key="_del_go", use_container_width=True):
+                _r = sv.loc[int(pick)]
+                if delete_worker(int(pick), str(_r.get("이름", "")),
+                                 str(_r.get("생년월일", ""))):
+                    st.success(f"{_label(int(pick))} 제외했습니다.")
+                    # TBM 명단도 이 명부에서 나오므로 같이 비운다.
+                    for k in ("_roster", "_roster_src", "_del_sure"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
+                else:
+                    st.error(f"제외 실패 — `{last_error()}`")
