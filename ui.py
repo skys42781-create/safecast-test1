@@ -133,6 +133,18 @@ def section(title: str, note: str = "") -> None:
 # 진입 게이트
 # =====================================================================
 
+# ┌─────────────────────────────────────────────────────────────┐
+# │  시연 모드 — 관리자 비밀번호를 묻지 않는다.                  │
+# │                                                             │
+# │  대회가 끝나면 아래를 False 로 되돌린다. 그 한 글자면        │
+# │  secrets 의 ADMIN_PW 로 다시 잠긴다.                        │
+# │                                                             │
+# │  켜 두는 동안에는 배포 주소를 아는 사람이면 누구나 관리자    │
+# │  화면에 들어온다. 거기에 근로자 이름·번호·증상 신고가 있다.  │
+# └─────────────────────────────────────────────────────────────┘
+DEMO_NO_PASSWORD = True
+
+
 def mode_gate(admin_pw: str = "") -> str | None:
     """처음 접속하면 역할을 먼저 묻는다.
 
@@ -149,6 +161,9 @@ def mode_gate(admin_pw: str = "") -> str | None:
     admin_pw: secrets의 ADMIN_PW. 비어 있으면 경고와 함께 통과시킨다.
     반환: "worker" | "admin" | None (아직 선택 안 함)
     """
+    if DEMO_NO_PASSWORD:
+        admin_pw = ""          # 아래 흐름이 '잠금 없음'으로 동작한다
+
     picked = st.session_state.get("_mode")
     if picked:
         return picked
@@ -184,11 +199,19 @@ def mode_gate(admin_pw: str = "") -> str | None:
 </div>""", unsafe_allow_html=True)
         if st.button("관리자로 시작", use_container_width=True,
                      type="primary", key="_g_admin"):
-            st.session_state["_gate_admin"] = True
+            # ADMIN_PW 가 비어 있으면 잠금이 없는 것이므로 바로 들여보낸다.
+            # 예전에는 이때도 경고 화면을 한 번 띄웠는데, 잠그지도 않으면서
+            # 한 단계를 더 거치게 할 뿐이었다. 시연 중에는 그 한 단계가
+            # 흐름을 끊는다. 잠그려면 secrets 에 ADMIN_PW 를 넣으면 된다.
+            if admin_pw:
+                st.session_state["_gate_admin"] = True
+            else:
+                st.session_state["_mode"] = "admin"
             st.rerun()
 
-    st.caption("관리자 모드는 비밀번호가 필요합니다. "
-               "민감군 명단이 포함되므로 접근을 제한합니다.")
+    if admin_pw:
+        st.caption("관리자 모드는 비밀번호가 필요합니다. "
+                   "민감군 명단이 포함되므로 접근을 제한합니다.")
     return None
 
 
@@ -205,20 +228,12 @@ def _admin_gate(admin_pw: str) -> str | None:
         st.session_state.pop("_gate_err", None)
         st.rerun()
 
-    # 비밀번호가 설정돼 있지 않으면 막을 방법이 없다.
-    # 조용히 통과시키면 잠겨 있다고 오해하므로 상태를 분명히 알린다.
+    # ADMIN_PW 가 비면 여기까지 오지 않는다(mode_gate 에서 바로 통과).
+    # 그래도 호출되면 막을 수단이 없으므로 통과시킨다.
     if not admin_pw:
-        st.warning("secrets에 ADMIN_PW가 설정되지 않았습니다 — 인증 없이 들어갑니다. "
-                   "실제 운영 전에 반드시 설정하세요.", icon="🔓")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("그래도 들어가기", use_container_width=True,
-                     type="primary", key="_g_nopw"):
-            st.session_state["_mode"] = "admin"
-            st.session_state.pop("_gate_admin", None)
-            st.rerun()
-        if c2.button("뒤로", use_container_width=True, key="_g_back0"):
-            _back()
-        return None
+        st.session_state["_mode"] = "admin"
+        st.session_state.pop("_gate_admin", None)
+        st.rerun()
 
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
