@@ -163,11 +163,17 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
     """근로자 등록 명부 → 표준 출역 명부.
 
     등록에서 받는 것은 조치 전달에 필요한 최소 정보뿐이다.
-      이름 · 소속 · 작업구역 · 공종 · 연령 · 투입일차 · 복귀자
+      이름 · 생년월일(→연령) · 투입일차 · 복귀자 · 연락처
+
+    소속·작업구역·공종은 등록에서 받지 않는다. 칸이 많으면 등록 자체를
+    미루고, 등록하지 않은 사람은 알람도 못 받기 때문이다. 없는 열은
+    아래 col() 이 기본값으로 채우므로 명부는 그대로 만들어진다.
 
     질환·약물 등 건강 정보는 받지 않으므로 False로 둔다.
     민감군 ①②④⑤는 관리자가 올리는 보건 CSV로 병합해야 판정된다.
-    자동으로 판정되는 것은 ③고령(연령) · ⑥고강도(공종) · ⑦신규배치(투입일차)다.
+    자동으로 판정되는 것은 ③고령(연령) · ⑦신규배치(투입일차)다.
+    ⑥고강도는 공종을 받지 않으므로 등록만으로는 판정되지 않는다.
+    보건관리자 CSV에 공종이 있으면 병합 단계에서 살아난다.
 
     [왜 건강 정보를 등록에서 받지 않는가]
       산업안전보건법 제132조제2항은 본인 동의 없는 건강정보 공개를 금지한다.
@@ -221,7 +227,14 @@ def merge_health(roster: pd.DataFrame, health: pd.DataFrame) -> pd.DataFrame:
 
     보건 CSV에는 질환 플래그만 담는다(병명 없음).
       성명, 만성질환, 온열질환기왕력, 약물복용, 알코올의존, 일시적건강저하
-    연령·옥외작업이 함께 들어 있으면 그것도 덮어쓴다.
+    연령·옥외작업·공종이 함께 들어 있으면 그것도 덮어쓴다.
+
+    [공종을 여기서 받는 이유]
+      근로자 등록에서는 공종을 묻지 않는다. 현장에서 각자 폰으로
+      입력하는 칸을 줄여야 등록률이 올라가기 때문이다. 그래서
+      ⑥고강도 작업 판정이 꺼져 있는데, 공종은 원래 관리자가 아는
+      정보다. 출역 데이터에 이미 들어 있으니 여기서 받으면
+      근로자에게 아무것도 더 묻지 않고 ⑥이 살아난다.
     """
     if roster.empty or health is None or health.empty:
         return roster
@@ -232,7 +245,8 @@ def merge_health(roster: pd.DataFrame, health: pd.DataFrame) -> pd.DataFrame:
 
     flags = ["만성질환", "온열질환기왕력", "약물복용",
              "알코올의존", "일시적건강저하"]
-    use = ["성명"] + [c for c in flags + ["연령", "옥외작업"] if c in h.columns]
+    use = ["성명"] + [c for c in flags + ["연령", "옥외작업", "공종"]
+                     if c in h.columns]
     h = h[use].drop_duplicates(subset="성명", keep="last")
 
     for c in [c for c in flags + ["옥외작업"] if c in h.columns]:
@@ -248,6 +262,12 @@ def merge_health(roster: pd.DataFrame, health: pd.DataFrame) -> pd.DataFrame:
     if "연령_h" in out.columns:
         out["연령"] = out["연령_h"].fillna(out["연령"]).astype(int)
         out = out.drop(columns=["연령_h"])
+    if "공종_h" in out.columns:
+        # 빈 칸이면 기존 값('미상')을 그대로 둔다. 일부만 적힌 CSV를
+        # 올려도 적힌 사람만 갱신되고 나머지는 지워지지 않는다.
+        t = out["공종_h"].fillna("").astype(str).str.strip()
+        out["공종"] = t.where(t != "", out["공종"])
+        out = out.drop(columns=["공종_h"])
     return out
 
 
@@ -333,9 +353,22 @@ def build_tbm(roster: pd.DataFrame, tier_code: str) -> pd.DataFrame:
     return out.sort_values(["_o", "해당유형"], ascending=[True, False]).drop(columns="_o")
 
 
+def _drop_blank_trade(df: pd.DataFrame) -> list[str]:
+    """공종 열을 보여줄지 정한다.
+
+    등록에서 공종을 받지 않으므로 보건 CSV를 병합하기 전에는 전원이
+    '미상'이다. 같은 값만 든 열은 자리만 차지하고 읽을 것이 없으므로 뺀다.
+    병합해서 실제 공종이 들어오면 자동으로 다시 나타난다.
+    """
+    if "공종" not in df.columns:
+        return []
+    vals = set(df["공종"].astype(str).str.strip()) - {"", "미상"}
+    return ["공종"] if vals else []
+
+
 def public_view(tbm: pd.DataFrame) -> pd.DataFrame:
     """TBM 조회용 — 질환명·상세 사유 없음. 아침 조회에서 화면에 띄우는 표."""
-    return tbm[["성명", "공종", "관리등급", "조치사항"]]
+    return tbm[["성명"] + _drop_blank_trade(tbm) + ["관리등급", "조치사항"]]
 
 
 def health_view(tbm: pd.DataFrame) -> pd.DataFrame:
@@ -344,7 +377,8 @@ def health_view(tbm: pd.DataFrame) -> pd.DataFrame:
     out["해당유형상세"] = out["_codes"].apply(
         lambda s: " / ".join(f"{type_by_code(c).no}{type_by_code(c).label}"
                              for c in s.split(",") if c))
-    return out[["성명", "공종", "관리등급", "해당유형상세", "조치사항"]]
+    return out[["성명"] + _drop_blank_trade(out)
+               + ["관리등급", "해당유형상세", "조치사항"]]
 
 
 # =====================================================================

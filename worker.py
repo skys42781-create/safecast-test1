@@ -14,7 +14,7 @@ SAFECASTY — 근로자 설문·신고 (GitHub 저장소)
   · 별도 계정·과금·조직 정책이 필요 없다
 
 [저장하는 것 / 저장하지 않는 것]
-  저장       이름 · 소속 · 구역 · 공종 · 투입일차 · 복귀여부
+  저장       이름 · 생년월일 · 연락처 · 투입일차 · 복귀여부
              신고 시각 · 증상 개수 · 처리상태
   저장 안 함 증상의 '종류', 만성질환·약물·음주 등 건강 정보
   → 건강 항목은 본인 화면에서 민감군 여부를 알려주는 데만 쓰고 버린다.
@@ -40,10 +40,15 @@ API = "https://api.github.com"
 SURVEY_PATH = "data/worker_survey.csv"
 REPORT_PATH = "data/worker_reports.csv"
 
-SURVEY_COLS = ["등록시각", "이름", "생년월일", "소속", "작업구역", "공종",
+# [등록 항목을 줄인 이유]
+#   현장에서 60명이 각자 폰으로 입력한다. 칸이 많을수록 등록을 미루고,
+#   등록하지 않은 사람은 알람도 못 받는다. 조치에 꼭 필요한 것만 남긴다.
+#   소속·작업구역은 판정에 쓰이지 않고 표시용 이름표였다.
+#   공종은 ⑥고강도 작업 자동판정에 쓰였는데, 그 판정을 포기하고 칸을 줄였다.
+#   (보건관리자 CSV에 공종이 있으면 병합 단계에서 다시 판정된다)
+SURVEY_COLS = ["등록시각", "이름", "생년월일",
                "연령", "투입일차", "복귀자", "연락처"]
-REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
-               "증상개수", "처리상태"]
+REPORT_COLS = ["시각", "이름", "생년월일", "증상개수", "처리상태"]
 
 # CSV를 읽을 때 반드시 문자열로 읽어야 하는 열.
 #
@@ -56,7 +61,7 @@ REPORT_COLS = ["시각", "이름", "생년월일", "소속", "작업구역",
 #
 #   투입일차도 같은 이유로 4가 4.0이 된다. 열순응 제한율 계산에 쓰이는
 #   값이라 화면과 명단에 그대로 노출된다.
-TEXT_COLS = ["이름", "생년월일", "소속", "작업구역", "공종",
+TEXT_COLS = ["이름", "생년월일",
              "투입일차", "복귀자", "처리상태", "연락처"]
 
 # 반대로, 숫자로 되돌려야 하는 열.
@@ -272,7 +277,7 @@ def find_worker(name: str, birth: str) -> dict | None:
     return hit.iloc[-1].to_dict() if not hit.empty else None
 
 
-def register(name: str, birth: str, org: str, zone: str, trade: str,
+def register(name: str, birth: str,
              day: int | None, is_return: bool, phone: str = "") -> bool:
     """연령은 생년월일에서 계산한다. 따로 묻지 않는다.
 
@@ -283,8 +288,6 @@ def register(name: str, birth: str, org: str, zone: str, trade: str,
     return _append(SURVEY_PATH, SURVEY_COLS, {
         "등록시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "이름": name.strip(), "생년월일": str(birth).strip(),
-        "소속": org.strip(),
-        "작업구역": zone.strip(), "공종": trade.strip(),
         "연령": age_from(birth),
         "투입일차": day if day else "",
         "복귀자": "예" if is_return else "아니오",
@@ -312,8 +315,6 @@ def submit_report(worker: dict, symptom_count: int) -> bool:
         "시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "이름": str(worker.get("이름", "")),
         "생년월일": str(worker.get("생년월일", "")),
-        "소속": str(worker.get("소속", "")),
-        "작업구역": str(worker.get("작업구역", "")),
         "증상개수": int(symptom_count),
         "처리상태": STATUS[0],
     }, f"report: {worker.get('이름', '')} 증상 {symptom_count}개")
@@ -408,8 +409,7 @@ def render_worker_entry() -> dict | None:
     me = st.session_state.get("_worker")
     if me:
         c1, c2 = st.columns([4, 1])
-        c1.success(f"**{me['이름']}** · {me.get('소속', '')} "
-                   f"{me.get('작업구역', '')}", icon="👷")
+        c1.success(f"**{me['이름']}** · 만 {me.get('연령', '')}세", icon="👷")
         if c2.button("변경", use_container_width=True):
             st.session_state.pop("_worker", None)
             st.rerun()
@@ -438,12 +438,8 @@ def render_worker_entry() -> dict | None:
             "다음부터는 바로 이용할 수 있습니다.", icon="📝")
 
     st.caption(f"**{name.strip()}** · 만 {age_from(birth)}세")
-    c1, c2 = st.columns(2)
-    org = c1.text_input("소속 (협력사)", placeholder="○○건설")
-    zone = c2.text_input("작업구역", placeholder="3공구")
-    trade = c1.text_input("공종", placeholder="철근")
     # 작업 중에는 화면을 볼 수 없다. 휴식·작업종료 통보는 문자로 간다.
-    phone = c2.text_input("휴대폰 (폭염 알람 수신)",
+    phone = st.text_input("휴대폰 (폭염 알람 수신)",
                           placeholder="010-1234-5678",
                           help="휴식 시각과 작업 종료 안내를 문자로 받습니다. "
                                "비워 두면 문자를 받지 않습니다.")
@@ -461,14 +457,10 @@ def render_worker_entry() -> dict | None:
                "저장하지 않으며 보건관리자가 별도로 관리합니다. "
                "(산업안전보건법 제132조제2항)")
 
-    if st.button("등록하고 시작하기", type="primary", use_container_width=True,
-                 disabled=not (org.strip() and zone.strip())):
-        if register(name, birth, org, zone, trade, day,
-                    track.startswith("복귀"), phone):
+    if st.button("등록하고 시작하기", type="primary", use_container_width=True):
+        if register(name, birth, day, track.startswith("복귀"), phone):
             st.session_state["_worker"] = {
                 "이름": name.strip(), "생년월일": birth.strip(),
-                "소속": org.strip(),
-                "작업구역": zone.strip(), "공종": trade.strip(),
                 "연령": age_from(birth), "투입일차": day if day else "",
                 "복귀자": "예" if track.startswith("복귀") else "아니오",
                 "연락처": phone.strip(),
@@ -477,8 +469,6 @@ def render_worker_entry() -> dict | None:
         else:
             st.error(f"등록에 실패했습니다. 관리자에게 알리세요.\n\n"
                      f"`{last_error()}`")
-    if not (org.strip() and zone.strip()):
-        st.caption("소속과 작업구역은 조치 전달에 필요합니다.")
     return None
 
 
@@ -565,7 +555,7 @@ GH_BRANCH = "main"''', language="toml")
             if "증상개수" in _rv.columns:
                 _rv["증상"] = _rv["증상개수"].astype(str) + "개"
             _UI.df_cards(_rv, title="이름", badge="처리상태",
-                         meta=["시각", "소속", "작업구역", "증상"],
+                         meta=["시각", "증상"],
                          empty="신고가 없습니다.")
 
         if not view.empty:
@@ -624,7 +614,7 @@ def render_roster() -> None:
         with st.expander(f"👷 등록 근로자 · {len(sv)}명", expanded=False):
             import ui as _UI
             _UI.df_cards(view, title="이름",
-                         meta=["소속", "작업구역", "공종", "연령"],
+                         meta=["연령", "투입일차", "연락처"],
                          empty="등록된 근로자가 없습니다.", limit=30)
             st.download_button("📥 등록 명부 CSV (TBM 명단 업로드용)",
                                sv.to_csv(index=False).encode("utf-8-sig"),
@@ -640,15 +630,14 @@ def render_roster() -> None:
             st.caption("현장을 떠났거나 잘못 등록된 사람을 지웁니다. "
                        "지난 신고 기록은 조치 근거라 함께 지우지 않습니다.")
 
-            # 동명이인이 있을 수 있으므로 소속·구역까지 붙여 고른다.
-            # 생년월일은 연도만 보여 준다 — 구분에는 그걸로 충분하다.
+            # 동명이인이 있을 수 있다. 출생연도와 번호 뒷자리를 붙여
+            # 어느 쪽인지 알아볼 수 있게 한다. 번호를 통째로 띄우지는 않는다.
             def _label(i: int) -> str:
                 r = sv.loc[i]
                 b = str(r.get("생년월일", ""))[:4]
-                part = " · ".join(x for x in (str(r.get("소속", "")).strip(),
-                                              str(r.get("작업구역", "")).strip())
-                                  if x)
-                return f"{r.get('이름', '')} ({b}년생)" + (f" · {part}" if part else "")
+                tel = str(r.get("연락처", "")).strip()
+                tail = f" · ****{tel[-4:]}" if len(tel) >= 4 else ""
+                return f"{r.get('이름', '')} ({b}년생){tail}"
 
             d1, d2 = st.columns([3, 1])
             pick = d1.selectbox("대상", list(sv.index), format_func=_label,
