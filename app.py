@@ -1383,6 +1383,9 @@ def main() -> None:
                        "보건관리자 CSV를 올리면 병합됩니다. "
                        "(산업안전보건법 제132조제2항)")
 
+        # 등록 명부 본문 — 누가 등록돼 있고 누구를 뺄지는 이 화면의 일이다.
+        W.render_roster()
+
         T.render_tbm_admin(roster, day_tier.code, day_tier.label, day_max)
 
     if _view == _VIEWS[3]:
