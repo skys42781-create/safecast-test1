@@ -46,6 +46,13 @@ import ui as UI
 
 KST = ZoneInfo("Asia/Seoul")
 
+# 관리자 화면에 처음 들어갔을 때 채워져 있는 현장.
+#   대회 시연 장소를 넣어 두면 들어가자마자 그 지역 예보가 뜬다.
+#   빈칸으로 두면 "현장 위치를 입력하세요"만 보이고 아무것도 안 나와,
+#   시연 첫 화면에서 타이핑부터 해야 한다.
+#   사이드바에서 지우고 다른 곳을 입력하면 그대로 바뀐다.
+DEFAULT_SITE = "하이원리조트"
+
 # ---------------------------------------------------------------------
 # 기상청 API 제공처 선택
 #   True  → 기상청 API허브 (apihub.kma.go.kr).  인증 파라미터: authKey
@@ -725,7 +732,9 @@ def main() -> None:
         st.divider()
         st.header("⚙️ 관제 설정")
 
-        place = st.text_input("현장 위치", placeholder="예: 국민대학교")
+        place = st.text_input("현장 위치", value=DEFAULT_SITE,
+                              placeholder="예: 국민대학교",
+                              help="지우고 다른 지명을 입력하면 그 현장으로 바뀝니다")
 
         st.divider()
         demo = st.toggle("데모 모드 (API 미사용)", value=not kma,
