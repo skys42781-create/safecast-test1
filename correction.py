@@ -93,7 +93,20 @@ ELEV_COOLDOWN_SEC = 600
 # 5km 격자 안에서도 지형이 크게 달라지므로 좁게 잡는다.
 KNOWN_MATCH_KM = 1.5
 
-KNOWN_SITES_CSV = Path(__file__).resolve().parent / "data" / "site_elevation.csv"
+# 고도표 위치. 레포 루트와 data/ 둘 다 본다.
+#
+# [왜 두 군데를 보는가]
+#   파일은 레포 루트에 있는데 코드가 data/ 만 보고 있었다. 그래서
+#   내장 고도표가 한 번도 로드되지 않았고, 매번 외부 고도 API로
+#   넘어갔다. 그 API가 배포 환경에서 자주 실패해 "고도 보정을
+#   건너뜁니다"가 떴다. 고도표에 값이 멀쩡히 들어 있는데도
+#   보정이 통째로 빠져 있었던 것이다.
+#
+#   파일을 옮기면 한쪽만 보면 되지만, 옮기는 순간 예전 배포가
+#   깨진다. 두 군데를 보게 하면 어디에 두든 동작한다.
+_ROOT = Path(__file__).resolve().parent
+KNOWN_SITES_PATHS = [_ROOT / "data" / "site_elevation.csv",
+                     _ROOT / "site_elevation.csv"]
 
 # 대체 API. 서비스가 다르므로 한쪽이 죽어도 우회가 된다.
 ELEV_APIS = [
@@ -126,12 +139,17 @@ def load_known_sites() -> pd.DataFrame:
       외부 서비스 상태와 무관하게 보정이 유지된다.
       (관측소 지점목록을 내장한 것과 같은 이유)
     """
-    try:
-        df = pd.read_csv(KNOWN_SITES_CSV)
-        need = {"name", "lat", "lon", "elev"}
-        return df if need.issubset(df.columns) else pd.DataFrame()
-    except Exception:
-        return pd.DataFrame()
+    need = {"name", "lat", "lon", "elev"}
+    for p in KNOWN_SITES_PATHS:
+        if not p.exists():
+            continue
+        try:
+            df = pd.read_csv(p)
+            if need.issubset(df.columns):
+                return df
+        except Exception:
+            continue
+    return pd.DataFrame()
 
 
 def _from_known(lat: float, lon: float) -> tuple[float | None, str]:
