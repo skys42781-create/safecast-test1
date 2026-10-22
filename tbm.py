@@ -163,7 +163,7 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
     """근로자 등록 명부 → 표준 출역 명부.
 
     등록에서 받는 것은 조치 전달에 필요한 최소 정보뿐이다.
-      이름 · 생년월일(→연령) · 투입일차 · 복귀자 · 연락처
+      이름 · 연락처 · 투입일차 · 복귀자
 
     소속·작업구역·공종은 등록에서 받지 않는다. 칸이 많으면 등록 자체를
     미루고, 등록하지 않은 사람은 알람도 못 받기 때문이다. 없는 열은
@@ -202,7 +202,7 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
     trade = col("공종", "미상").replace("", "미상")
     out = pd.DataFrame({
         "성명": col("이름"),
-        "생년월일": col("생년월일"),
+        "연락처": col("연락처"),
         "소속": col("소속"),
         "작업구역": col("작업구역"),
         "공종": trade,
@@ -217,7 +217,10 @@ def from_survey(sv: pd.DataFrame) -> pd.DataFrame:
 
     # 같은 사람이 여러 번 등록했으면 최근 것만.
     # 동명이인이 있으므로 성명만으로 중복 제거하면 한 사람이 사라진다.
-    key = ["성명", "생년월일"] if "생년월일" in out.columns else ["성명"]
+    # 번호는 한 사람에 하나뿐이라 동명이인을 가르는 기준이 된다.
+    key = (["성명", "연락처"]
+           if "연락처" in out.columns and out["연락처"].ne("").any()
+           else ["성명"])
     out = out[out["성명"] != ""].drop_duplicates(subset=key, keep="last")
     return out.reset_index(drop=True)
 
@@ -353,22 +356,27 @@ def build_tbm(roster: pd.DataFrame, tier_code: str) -> pd.DataFrame:
     return out.sort_values(["_o", "해당유형"], ascending=[True, False]).drop(columns="_o")
 
 
-def _drop_blank_trade(df: pd.DataFrame) -> list[str]:
-    """공종 열을 보여줄지 정한다.
+def has_trade(df: pd.DataFrame) -> bool:
+    """공종에 읽을 값이 들어 있는가.
 
     등록에서 공종을 받지 않으므로 보건 CSV를 병합하기 전에는 전원이
-    '미상'이다. 같은 값만 든 열은 자리만 차지하고 읽을 것이 없으므로 뺀다.
-    병합해서 실제 공종이 들어오면 자동으로 다시 나타난다.
+    '미상'이다. 그런 열은 화면에서 빼는 편이 읽기 좋다.
+
+    [왜 열 자체를 빼지 않는가]
+      한때 public_view 가 공종 열을 통째로 떨어뜨렸다. 그러자 그 결과를
+      받아 쓰는 쪽(admin_data)이 t["공종"] 에서 KeyError 로 죽었다.
+      넘겨주는 표의 열 구성이 데이터에 따라 달라지면, 받는 쪽은 매번
+      있는지 확인해야 하고 한 군데만 빠뜨려도 화면이 통째로 멈춘다.
+      표의 모양은 고정해 두고, 감출지 말지는 그리는 쪽에서 정한다.
     """
     if "공종" not in df.columns:
-        return []
-    vals = set(df["공종"].astype(str).str.strip()) - {"", "미상"}
-    return ["공종"] if vals else []
+        return False
+    return bool(set(df["공종"].astype(str).str.strip()) - {"", "미상"})
 
 
 def public_view(tbm: pd.DataFrame) -> pd.DataFrame:
     """TBM 조회용 — 질환명·상세 사유 없음. 아침 조회에서 화면에 띄우는 표."""
-    return tbm[["성명"] + _drop_blank_trade(tbm) + ["관리등급", "조치사항"]]
+    return tbm[["성명", "공종", "관리등급", "조치사항"]]
 
 
 def health_view(tbm: pd.DataFrame) -> pd.DataFrame:
@@ -377,8 +385,7 @@ def health_view(tbm: pd.DataFrame) -> pd.DataFrame:
     out["해당유형상세"] = out["_codes"].apply(
         lambda s: " / ".join(f"{type_by_code(c).no}{type_by_code(c).label}"
                              for c in s.split(",") if c))
-    return out[["성명"] + _drop_blank_trade(out)
-               + ["관리등급", "해당유형상세", "조치사항"]]
+    return out[["성명", "공종", "관리등급", "해당유형상세", "조치사항"]]
 
 
 # =====================================================================
@@ -569,8 +576,10 @@ def render_tbm_admin(roster: pd.DataFrame, tier_code: str, tier_label: str,
     with tab1:
         st.caption("아침 조회에서 화면에 띄우는 표 — 질환명·상세 사유 미표시")
         import ui as _UI
+        # 전원이 '미상'이면 공종 줄을 띄우지 않는다. 표의 열 구성은
+        # 그대로 두고 보여줄지만 여기서 정한다.
         _UI.df_cards(public_view(tbm), title="성명", badge="관리등급",
-                     meta=["공종"], body="조치사항",
+                     meta=["공종"] if has_trade(tbm) else [], body="조치사항",
                      empty="해당 등급에서 관리 대상자가 없습니다.")
         st.download_button("📥 TBM 명단 CSV",
                            public_view(tbm).to_csv(index=False).encode("utf-8-sig"),

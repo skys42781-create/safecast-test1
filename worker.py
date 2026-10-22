@@ -14,7 +14,7 @@ SAFECASTY — 근로자 설문·신고 (GitHub 저장소)
   · 별도 계정·과금·조직 정책이 필요 없다
 
 [저장하는 것 / 저장하지 않는 것]
-  저장       이름 · 생년월일 · 연락처 · 투입일차 · 복귀여부
+  저장       이름 · 연락처 · 투입일차 · 복귀여부
              신고 시각 · 증상 개수 · 처리상태
   저장 안 함 증상의 '종류', 만성질환·약물·음주 등 건강 정보
   → 건강 항목은 본인 화면에서 민감군 여부를 알려주는 데만 쓰고 버린다.
@@ -35,6 +35,8 @@ import pandas as pd
 import requests
 import streamlit as st
 
+import sms as SMS
+
 API = "https://api.github.com"
 
 SURVEY_PATH = "data/worker_survey.csv"
@@ -46,9 +48,8 @@ REPORT_PATH = "data/worker_reports.csv"
 #   소속·작업구역은 판정에 쓰이지 않고 표시용 이름표였다.
 #   공종은 ⑥고강도 작업 자동판정에 쓰였는데, 그 판정을 포기하고 칸을 줄였다.
 #   (보건관리자 CSV에 공종이 있으면 병합 단계에서 다시 판정된다)
-SURVEY_COLS = ["등록시각", "이름", "생년월일",
-               "연령", "투입일차", "복귀자", "연락처"]
-REPORT_COLS = ["시각", "이름", "생년월일", "증상개수", "처리상태"]
+SURVEY_COLS = ["등록시각", "이름", "연락처", "투입일차", "복귀자"]
+REPORT_COLS = ["시각", "이름", "연락처", "증상개수", "처리상태"]
 
 # CSV를 읽을 때 반드시 문자열로 읽어야 하는 열.
 #
@@ -56,13 +57,12 @@ REPORT_COLS = ["시각", "이름", "생년월일", "증상개수", "처리상태
 #   pandas는 "19880323" 같은 칸을 숫자로 보고 float으로 바꾼다.
 #   그러면 읽고 → 한 줄 더해 → 다시 쓰는 과정에서 기존 행이
 #   19880323.0 으로 변한다. 새로 들어가는 행만 문자열이라
-#   같은 사람이 두 값으로 갈라지고, 이름+생년월일 조회도 어긋난다.
+#   같은 사람이 두 값으로 갈라지고, 이름+번호 조회도 어긋난다.
 #   동명이인 구분이 식별의 근거이므로 이건 안전 문제다.
 #
 #   투입일차도 같은 이유로 4가 4.0이 된다. 열순응 제한율 계산에 쓰이는
 #   값이라 화면과 명단에 그대로 노출된다.
-TEXT_COLS = ["이름", "생년월일",
-             "투입일차", "복귀자", "처리상태", "연락처"]
+TEXT_COLS = ["이름", "투입일차", "복귀자", "처리상태", "연락처"]
 
 # 반대로, 숫자로 되돌려야 하는 열.
 #
@@ -71,7 +71,7 @@ TEXT_COLS = ["이름", "생년월일",
 #   본래 숫자인 열까지 문자열이 되어, "3" >= 3 같은 비교에서 TypeError가
 #   난다. 읽은 직후 이 열들만 숫자로 되돌린다.
 #   빈 칸이나 깨진 값은 0으로 둔다 — 화면이 멈추는 것보다 낫다.
-NUM_COLS = ["증상개수", "연령"]
+NUM_COLS = ["증상개수"]
 
 STATUS = ["미확인", "확인함", "조치완료"]
 
@@ -238,31 +238,32 @@ def load_survey() -> pd.DataFrame:
     return df
 
 
-def age_from(birth: str) -> int:
-    """생년월일(YYYYMMDD) → 만 나이."""
-    try:
-        b = datetime.strptime(str(birth).strip(), "%Y%m%d")
-    except ValueError:
-        return 0
-    t = datetime.now()
-    return t.year - b.year - ((t.month, t.day) < (b.month, b.day))
+def norm_phone(phone: str) -> str:
+    """번호에서 숫자만 남긴다. 010-1234-5678 과 01012345678 은 같은 사람이다."""
+    return SMS.only_digits(phone)
 
 
-def valid_birth(birth: str) -> bool:
-    """입력된 생년월일이 쓸 수 있는 값인가.
+def valid_phone(phone: str) -> bool:
+    """본인 식별에 쓸 수 있는 번호인가.
 
-    strptime("%Y%m%d")는 7자리(예: 1970031)도 받아들이므로
-    길이를 따로 검사해야 오입력이 걸러진다.
+    [왜 sms.py 의 판정을 그대로 쓰는가]
+      여기서 통과시킨 번호는 나중에 문자를 보낼 번호다. 규칙을 따로
+      두면 언젠가 어긋나고, 그때는 등록은 됐는데 알람만 조용히 안 가는
+      상태가 된다. 등록에서 받아들이는 번호와 발송이 받아들이는 번호는
+      같아야 한다.
+
+    [왜 번호로 사람을 가리는가]
+      예전에는 이름+생년월일로 찾았다. 생년월일은 외우기는 쉬워도
+      입력 칸이 하나 더 필요하고, 그 자체로 민감한 개인정보다.
+      번호는 어차피 폭염 알람을 보내려고 받아야 하는 값이고,
+      한 사람에 하나뿐이라 동명이인도 자연히 갈린다.
+      받는 정보를 늘리지 않으면서 식별이 더 정확해진다.
     """
-    b = str(birth).strip()
-    if len(b) != 8 or not b.isdigit():
-        return False
-    a = age_from(b)
-    return 15 <= a <= 95
+    return SMS.valid_phone(phone)
 
 
-def find_worker(name: str, birth: str) -> dict | None:
-    """이름 + 생년월일로 찾는다.
+def find_worker(name: str, phone: str) -> dict | None:
+    """이름 + 번호로 찾는다.
 
     [왜 이름만으로는 안 되는가]
       건설현장 60명 규모면 동명이인이 나온다. 이름만으로 찾으면
@@ -270,28 +271,26 @@ def find_worker(name: str, birth: str) -> dict | None:
       증상이 신고된다. 엉뚱한 사람이 조치 대상이 되므로 안전 문제다.
     """
     df = load_survey()
-    if df.empty or "이름" not in df.columns or "생년월일" not in df.columns:
+    if df.empty or "이름" not in df.columns or "연락처" not in df.columns:
         return None
     hit = df[(df["이름"].astype(str).str.strip() == name.strip())
-             & (df["생년월일"].astype(str).str.strip() == str(birth).strip())]
+             & (df["연락처"].map(norm_phone) == norm_phone(phone))]
     return hit.iloc[-1].to_dict() if not hit.empty else None
 
 
-def register(name: str, birth: str,
-             day: int | None, is_return: bool, phone: str = "") -> bool:
-    """연령은 생년월일에서 계산한다. 따로 묻지 않는다.
+def register(name: str, phone: str,
+             day: int | None, is_return: bool) -> bool:
+    """이름과 번호만 받는다.
 
-    phone: 폭염 알람을 받을 번호. 작업 중에는 화면을 볼 수 없으므로
-           휴식·작업종료 통보는 문자로 간다. 비워 두면 문자를 받지 않는다.
+    phone: 본인 식별이자 폭염 알람을 받을 번호. 작업 중에는 화면을
+           볼 수 없으므로 휴식·작업종료 통보는 문자로 간다.
     """
-    import re as _re
     return _append(SURVEY_PATH, SURVEY_COLS, {
         "등록시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "이름": name.strip(), "생년월일": str(birth).strip(),
-        "연령": age_from(birth),
+        "이름": name.strip(),
+        "연락처": norm_phone(phone),
         "투입일차": day if day else "",
         "복귀자": "예" if is_return else "아니오",
-        "연락처": _re.sub(r"\D", "", str(phone or "")),
     }, f"survey: {name.strip()} 등록")
 
 
@@ -314,7 +313,7 @@ def submit_report(worker: dict, symptom_count: int) -> bool:
     return _append(REPORT_PATH, REPORT_COLS, {
         "시각": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "이름": str(worker.get("이름", "")),
-        "생년월일": str(worker.get("생년월일", "")),
+        "연락처": norm_phone(worker.get("연락처", "")),
         "증상개수": int(symptom_count),
         "처리상태": STATUS[0],
     }, f"report: {worker.get('이름', '')} 증상 {symptom_count}개")
@@ -332,13 +331,13 @@ def update_status(idx: int, status: str) -> bool:
 
 
 def delete_worker(idx: int, name: str | None = None,
-                  birth: str | None = None) -> bool:
+                  phone: str | None = None) -> bool:
     """등록 명부에서 한 사람을 지운다.
 
     [왜 필요한가]
       잘못 입력했거나 중복 등록된 행, 현장을 떠난 사람이 명부에 남으면
       알람 수신 인원과 민감군 집계가 실제 인원과 어긋난다. 그리고
-      현장을 떠난 사람의 이름·생년월일·연락처를 계속 쥐고 있을 이유도
+      현장을 떠난 사람의 이름과 번호를 계속 쥐고 있을 이유도
       없다. 지울 수단이 있어야 명부가 현장과 맞는다.
 
     [신고 기록은 함께 지우지 않는다]
@@ -346,11 +345,11 @@ def delete_worker(idx: int, name: str | None = None,
       명부에서 뺐다고 과거 기록까지 사라지면 조치의 이유를 댈 수
       없게 된다. 신고 기록을 지워야 하면 신고 화면에서 따로 지운다.
 
-    [왜 번호가 아니라 이름·생년월일로 다시 확인하는가]
+    [왜 행 번호가 아니라 이름·연락처로 다시 확인하는가]
       화면에 목록을 띄운 뒤 누르기까지 사이에 다른 사람이 등록하거나
       지우면 행 번호가 밀릴 수 있다. 번호만 믿고 지우면 엉뚱한 사람이
       빠진다. 지우기 직전에 다시 읽어, 그 번호의 행이 고른 사람과
-      같은지 확인하고 다르면 이름·생년월일로 찾아간다.
+      같은지 확인하고 다르면 이름·연락처로 찾아간다.
     """
     df, sha = _read(SURVEY_PATH, SURVEY_COLS)
     if df.empty:
@@ -361,11 +360,11 @@ def delete_worker(idx: int, name: str | None = None,
         r = df.loc[idx]
         if (name is None or
                 (str(r.get("이름", "")).strip() == str(name).strip()
-                 and str(r.get("생년월일", "")).strip() == str(birth).strip())):
+                 and norm_phone(r.get("연락처", "")) == norm_phone(phone))):
             target = idx
     if target is None and name is not None:
         hit = df[(df["이름"].astype(str).str.strip() == str(name).strip())
-                 & (df["생년월일"].astype(str).str.strip() == str(birth).strip())]
+                 & (df["연락처"].map(norm_phone) == norm_phone(phone))]
         if len(hit) != 1:          # 못 찾거나 똑같은 행이 여럿이면 멈춘다
             st.session_state["_gh_err"] = (
                 "대상을 특정하지 못했습니다 (명부가 바뀌었을 수 있습니다). "
@@ -409,7 +408,10 @@ def render_worker_entry() -> dict | None:
     me = st.session_state.get("_worker")
     if me:
         c1, c2 = st.columns([4, 1])
-        c1.success(f"**{me['이름']}** · 만 {me.get('연령', '')}세", icon="👷")
+        _d = norm_phone(me.get("연락처", ""))
+        c1.success(f"**{me['이름']}**" +
+                   (f" · {_d[:3]}-****-{_d[-4:]}" if len(_d) >= 8 else ""),
+                   icon="👷")
         if c2.button("변경", use_container_width=True):
             st.session_state.pop("_worker", None)
             st.rerun()
@@ -418,17 +420,18 @@ def render_worker_entry() -> dict | None:
     st.subheader("👷 근로자 확인")
     c1, c2 = st.columns(2)
     name = c1.text_input("이름", placeholder="홍길동")
-    birth = c2.text_input("생년월일 8자리", placeholder="19700315", max_chars=8,
-                          help="동명이인 구분과 연령(민감군 ③고령) 판정에 사용합니다")
+    phone = c2.text_input("휴대폰 번호", placeholder="010-1234-5678",
+                          help="본인 확인과 폭염 알람 수신에 사용합니다. "
+                               "휴식 시각과 작업 종료 안내를 문자로 받습니다.")
 
-    if not name.strip() or not birth.strip():
-        st.caption("이름과 생년월일을 입력하면 등록 여부를 확인합니다.")
+    if not name.strip() or not phone.strip():
+        st.caption("이름과 휴대폰 번호를 입력하면 등록 여부를 확인합니다.")
         return None
-    if not valid_birth(birth):
-        st.error("생년월일을 8자리로 정확히 입력하세요. 예) 19700315")
+    if not valid_phone(phone):
+        st.error("휴대폰 번호를 정확히 입력하세요. 예) 010-1234-5678")
         return None
 
-    found = find_worker(name, birth)
+    found = find_worker(name, phone)
     if found:
         st.session_state["_worker"] = found
         st.rerun()
@@ -437,12 +440,8 @@ def render_worker_entry() -> dict | None:
     st.info("처음 오셨네요. 아래 정보를 한 번만 입력하면 "
             "다음부터는 바로 이용할 수 있습니다.", icon="📝")
 
-    st.caption(f"**{name.strip()}** · 만 {age_from(birth)}세")
-    # 작업 중에는 화면을 볼 수 없다. 휴식·작업종료 통보는 문자로 간다.
-    phone = st.text_input("휴대폰 (폭염 알람 수신)",
-                          placeholder="010-1234-5678",
-                          help="휴식 시각과 작업 종료 안내를 문자로 받습니다. "
-                               "비워 두면 문자를 받지 않습니다.")
+    d = norm_phone(phone)
+    st.caption(f"**{name.strip()}** · {d[:3]}-****-{d[-4:]}")
 
     st.markdown("##### 폭염작업 투입")
     t1, t2 = st.columns(2)
@@ -458,12 +457,11 @@ def render_worker_entry() -> dict | None:
                "(산업안전보건법 제132조제2항)")
 
     if st.button("등록하고 시작하기", type="primary", use_container_width=True):
-        if register(name, birth, day, track.startswith("복귀"), phone):
+        if register(name, phone, day, track.startswith("복귀")):
             st.session_state["_worker"] = {
-                "이름": name.strip(), "생년월일": birth.strip(),
-                "연령": age_from(birth), "투입일차": day if day else "",
+                "이름": name.strip(), "연락처": norm_phone(phone),
+                "투입일차": day if day else "",
                 "복귀자": "예" if track.startswith("복귀") else "아니오",
-                "연락처": phone.strip(),
             }
             st.rerun()
         else:
@@ -544,9 +542,11 @@ GH_BRANCH = "main"''', language="toml")
             st.error(f"🚨 미확인 신고 {pending}건 — 즉시 현장 확인이 필요합니다.",
                      icon="🚨")
 
+        # 번호는 통째로 띄우지 않는다. 누구인지 가리는 데는 뒷자리면 된다.
         rv = view.copy()
-        if "생년월일" in rv.columns:
-            rv = rv.drop(columns=["생년월일"])
+        if "연락처" in rv.columns:
+            rv["연락처"] = rv["연락처"].astype(str).map(
+                lambda d: f"****{d[-4:]}" if len(d) >= 4 else "")
         # 미확인이 있으면 열어 두고, 없으면 접는다.
         # 확인이 필요한 상태를 놓치지 않게 하되 평소엔 화면을 비운다.
         with st.expander(f"신고 내역 · {len(view)}건", expanded=bool(pending)):
@@ -601,20 +601,16 @@ def render_roster() -> None:
         st.caption("등록된 근로자가 없습니다. "
                    "근로자 모드에서 QR로 접속해 등록합니다.")
     else:
-        # 생년월일은 화면에 그대로 띄우지 않는다. 조치에는 연령이면 충분하고,
-        # 어깨너머로 노출될 이유가 없다.
+        # 번호를 그대로 띄우지 않는다. 문자 발송은 시스템이 하므로
+        # 관리자가 번호 전체를 볼 일이 없다. 어깨너머 노출도 막는다.
         view = sv.copy()
-        if "생년월일" in view.columns:
-            view["생년월일"] = view["생년월일"].astype(str).str[:4] + "****"
-        # 번호도 그대로 띄우지 않는다. 문자 발송은 시스템이 하므로
-        # 관리자가 번호 전체를 볼 일이 없다.
         if "연락처" in view.columns:
             view["연락처"] = view["연락처"].astype(str).map(
                 lambda d: f"{d[:3]}-****-{d[-4:]}" if len(d) >= 8 else "")
         with st.expander(f"👷 등록 근로자 · {len(sv)}명", expanded=False):
             import ui as _UI
             _UI.df_cards(view, title="이름",
-                         meta=["연령", "투입일차", "연락처"],
+                         meta=["연락처", "투입일차", "등록시각"],
                          empty="등록된 근로자가 없습니다.", limit=30)
             st.download_button("📥 등록 명부 CSV (TBM 명단 업로드용)",
                                sv.to_csv(index=False).encode("utf-8-sig"),
@@ -630,14 +626,13 @@ def render_roster() -> None:
             st.caption("현장을 떠났거나 잘못 등록된 사람을 지웁니다. "
                        "지난 신고 기록은 조치 근거라 함께 지우지 않습니다.")
 
-            # 동명이인이 있을 수 있다. 출생연도와 번호 뒷자리를 붙여
-            # 어느 쪽인지 알아볼 수 있게 한다. 번호를 통째로 띄우지는 않는다.
+            # 동명이인이 있어도 번호는 한 사람에 하나뿐이라 뒷자리로 갈린다.
+            # 번호를 통째로 띄우지는 않는다.
             def _label(i: int) -> str:
                 r = sv.loc[i]
-                b = str(r.get("생년월일", ""))[:4]
-                tel = str(r.get("연락처", "")).strip()
-                tail = f" · ****{tel[-4:]}" if len(tel) >= 4 else ""
-                return f"{r.get('이름', '')} ({b}년생){tail}"
+                tel = norm_phone(r.get("연락처", ""))
+                tail = f" · ****{tel[-4:]}" if len(tel) >= 4 else " · 번호 없음"
+                return f"{r.get('이름', '')}{tail}"
 
             d1, d2 = st.columns([3, 1])
             pick = d1.selectbox("대상", list(sv.index), format_func=_label,
@@ -648,7 +643,7 @@ def render_roster() -> None:
                          key="_del_go", use_container_width=True):
                 _r = sv.loc[int(pick)]
                 if delete_worker(int(pick), str(_r.get("이름", "")),
-                                 str(_r.get("생년월일", ""))):
+                                 str(_r.get("연락처", ""))):
                     st.success(f"{_label(int(pick))} 제외했습니다.")
                     # TBM 명단도 이 명부에서 나오므로 같이 비운다.
                     for k in ("_roster", "_roster_src", "_del_sure"):

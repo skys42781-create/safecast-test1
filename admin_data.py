@@ -95,12 +95,15 @@ def _workers(ctx: dict, limit: int) -> list[dict]:
     pv = ctx["tbm_public"]
     if pv is None or pv.empty:
         return []
+    # 열이 하나라도 없으면 통째로 죽는 자리다. 관제 화면 전체가
+    # 민감군 한 줄 때문에 멈추지 않도록 .get 으로 읽는다.
     out = []
     for _, t in pv.head(limit).iterrows():
-        out.append({"name": str(t["성명"]),
-                    "types": str(t["조치사항"])[:30],
-                    "status": str(t["공종"]),
-                    "risk": RISK.get(str(t["관리등급"]), "평시")})
+        trade = str(t.get("공종", "") or "").strip()
+        out.append({"name": str(t.get("성명", "")),
+                    "types": str(t.get("조치사항", ""))[:30],
+                    "status": "" if trade in ("", "미상") else trade,
+                    "risk": RISK.get(str(t.get("관리등급", "")), "평시")})
     return out
 
 
